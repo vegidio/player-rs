@@ -1,0 +1,179 @@
+schema: spec-driven
+
+context: |
+  # Project: player-rs
+
+  A fast, user-friendly video player for Rust, built on libmpv. The goal is to play anything mpv can play (including
+  4K/HDR) smoothly on modest hardware, and to eventually expose every feature of mpv (https://mpv.io) through an
+  idiomatic Rust API.
+
+  ## Sources of truth
+
+  - Playback/backend behaviour: mpv / libmpv (https://mpv.io, client API and render API docs).
+  - Native libraries: the prebuilt static libmpv libraries from https://github.com/vegidio/binaries-mpv. The project
+    links them statically; it does not build mpv from source.
+  - API design reference: https://github.com/vegidio/media-rs, which does for FFmpeg what this project does for mpv
+    (safe, ergonomic wrapper over static native libs). Follow its conventions for build scripts, linking, error handling
+    and public API style unless there is a reason not to.
+  - UI look, feel and frontend behaviour: Video.js (https://videojs.org). Control bar layout, controls, keyboard
+    shortcuts, hover/idle behaviour, menus, fullscreen, captions UI, etc. must match Video.js. When unsure how something
+    should look or behave, do what Video.js does.
+  - GUI toolkit: GPUI-Kit (https://gpui-kit.com) first; drop down to raw GPUI (https://gpui.rs) only for what GPUI-Kit
+    cannot do.
+
+  ## rust-sak comes first
+
+  `rust-sak` (https://github.com/vegidio/rust-sak, cloned locally at ../rust-sak) is a first-party crate. Before writing
+  any infrastructure code - hashing, HTTP, retries, downloads, archive extraction, temp files, config directories, image
+  codecs, caching, telemetry, hardware probes - CHECK `rust-sak` FIRST. Read ../rust-sak/README.md and the per-module
+  READMEs under ../rust-sak/src/. Do not reinvent something it already provides, and do not reach for a third-party
+  crate that duplicates one of its modules.
+
+  What it already covers, and what that replaces here:
+
+  - `crypto`  - SHA-256 and XXH3-64 hashing of bytes, strings and files -> the pinned-hash verification of downloaded
+                dependencies.
+  - `fetch`   - a reusable reqwest client with Fibonacci-backoff retries and RESUMABLE streaming downloads with live
+                progress -> the whole dependency/model download path.
+  - `fs`      - filesystem helpers, RAII temp handles, config dirs, and a hardened ZIP/7z/TAR.XZ extractor that treats
+                every entry as hostile -> extracting the .7z release archives.
+  - `memo`    - memoization with pluggable storage (memory, disk, or memory-over-disk) and concurrent calls coalesced ->
+                the per-operation run cache, including its disk/memory/none fallback modes, which line up with what
+                `memo` already offers.
+  - `o11y`    - logs, metrics and traces to an OpenTelemetry collector over OTLP, exported on a background thread ->
+                telemetry.
+  - `sysinfo` - CPU, memory and GPU probes via each platform's own interface, no subprocesses -> hardware detection and
+                the model memory budgets.
+
+  It has NO default features; enable exactly the ones needed. MSRV 1.95.
+
+  If a `rust-sak` feature is close but incomplete - it does not cover a format, an option or an edge case this project
+  needs - do not work around it locally and do not fork the behaviour into `opai`. Judge whether the missing piece
+  belongs in `rust-sak`: if it is general-purpose and another project could want it, extend `rust-sak` itself, and only
+  then consume it here. Treat that as explicit work - say so in the design, give it its own tasks, and get the go-ahead
+  before pushing to the `rust-sak` repository, since consumers pin it by git tag and a push there is a release. It is
+  NOT published to crates.io - it depends on its `o11y-macros` sibling by path, which `cargo publish` rejects, so a git
+  dependency is the only way to take it. Only when the need is genuinely specific to this app does the code belong here
+  instead.
+
+  ## Change size and slicing
+
+  No change may carry more than 15 tasks. When a feature would need more, do not create one oversized change: divide it
+  into slices of at most 15 tasks each, and make EACH SLICE ITS OWN CHANGE, so it can be proposed, implemented, verified
+  and archived on its own.
+
+  Divide by what a slice delivers, not by task count alone - each one should leave the project in a working, testable
+  state rather than half-wired. Order them so a slice only depends on slices before it. Name them so the series is
+  obvious (for example `add-dep-installer-1-download`, `add-dep-installer-2-extract`).
+
+  Every slice's design.md must contain a section listing the WHOLE series: each slice in order, what it delivers, what
+  it depends on, and which ones are already done. Repeat that list in every slice, not only the first - a change gets
+  archived, and the plan has to stay visible to whoever picks up the next one. Propose only the current slice's change;
+  the remaining slices are proposed when they are reached.
+
+  When proposing a new change, check if the change is part of a series and read all the previous slices in the series to
+  understand the context, dependencies and what was already implemented and agreed upon.
+
+  ## Workspace layout
+
+  Cargo workspace with these crates:
+
+  - `crates/player` — the core crate. A safe Rust wrapper around libmpv that provides every backend feature needed to
+    play media: loading, playback control, seeking, tracks (audio/video/subtitle), volume, speed, properties, events,
+    and the render API integration. It has NO dependency on any GUI toolkit and knows nothing about UI. Every GUI crate
+    depends on it.
+  - `crates/gpui` — the player UI implemented with GPUI-Kit/GPUI. Responsible only for presentation and user interaction
+    (controls, layout, input, animations), plus the GPUI-specific glue that puts mpv's frames on screen. An app already
+    using GPUI-Kit adds this crate to get a video player component.
+
+  Planned later: other GUI crates (e.g. `crates/egui`) offering the same player features and Video.js-based look on
+  other Rust GUI toolkits. Every design decision must keep that possible:
+  - Anything not specific to a GUI toolkit (player state, playback logic, track selection, time/format helpers, UI state
+    that is toolkit-agnostic) belongs in `crates/player`, so it is not reimplemented per toolkit.
+  - GUI crates must never call libmpv directly; they go through `crates/player`.
+  - `crates/player` must never depend on GPUI, GPUI-Kit or any other GUI crate.
+
+  ## Rendering architecture (zero-copy)
+
+  Video frames must never be copied through the CPU.
+
+  1. `crates/player` drives libmpv's OpenGL render API (`mpv_render_context`): the host provides a GL context and an
+     FBO; mpv does hardware decoding, scaling, color conversion, tone mapping and subtitle rendering, and draws the
+     final RGBA frame into a texture we own.
+  2. That texture is shared with GPUI's native renderer through platform interop and displayed with GPUI's `surface()`
+     element (or an equivalent custom element):
+     - macOS: IOSurface-backed GL texture, wrapped on GPUI's Metal side. (Apple's OpenGL is deprecated but still works.)
+     - Windows: `WGL_NV_DX_interop` or an ANGLE-style D3D11 share into GPUI's D3D11 texture.
+     - Linux: EGL image exported as a dma-buf, imported into GPUI's Vulkan renderer.
+  The generic part (render context, frame callbacks, FBO handling) lives in `crates/player`; only the import into the
+  toolkit's renderer lives in the GUI crate.
+
+  ## Platforms
+
+  macOS, Windows and Linux. Features must work on all three or the gap must be documented explicitly.
+
+  ## Tech stack
+
+  - Rust (stable, edition 2024), Cargo workspace.
+  - libmpv (static, from binaries-mpv) via FFI.
+  - GPUI-Kit / GPUI for the first GUI implementation.
+
+rules:
+  proposal:
+    - State which crate(s) the change touches (`crates/player`, `crates/gpui`, or both) and why each piece belongs where
+      it is.
+    - For UI changes, reference the Video.js behaviour or look being reproduced.
+    - For backend changes, name the libmpv APIs, properties, commands or options involved.
+    - Call out any platform (macOS, Windows, Linux) the change does not support yet.
+    - If the change needs infrastructure, state what you found in `rust-sak` for it - including "nothing" - before
+      proposing anything else. A proposal that rebuilds a `rust-sak` module is wrong.
+    - 'Estimate the task count before writing anything else. If the feature needs more than 15 tasks, do not propose it
+      as one change: divide it into slices, propose only the current slice as this change, and name it as part of the
+      series.'
+  specs:
+    - Keep backend requirements (`crates/player`) toolkit-agnostic; they must not mention GPUI, GPUI-Kit or any widget.
+    - UI requirements describe user-visible behaviour as Video.js defines it (controls, shortcuts, states, timings), not
+      implementation details.
+    - Include scenarios for platform-specific behaviour when it differs between macOS, Windows and Linux.
+  design:
+    - When the feature is sliced across several changes, include a "Slices" section listing the whole series in order -
+      each slice's name, what it delivers, what it depends on, and whether it is done, current or pending. Include this
+      list in EVERY slice's design.md, not only the first, and mark which slice this change is.
+    - Name the `rust-sak` features the design uses and, for anything it does not cover, say whether the gap should be
+      filled by extending `rust-sak` or by code local to this project - and why. Never introduce a third-party crate
+      that duplicates a `rust-sak` module.
+    - Name every other crate the change introduces and why it was chosen over the alternatives.
+    - Explain how the design keeps backend and UI separated, and confirm a future GUI crate (e.g. egui) could reuse the
+      backend part unchanged.
+    - Any work touching frames or rendering must preserve the zero-copy path; justify any CPU copy explicitly.
+    - Say whether GPUI-Kit covers the UI need or why raw GPUI is required.
+    - Note unsafe/FFI boundaries, threading (mpv event and render callbacks vs. the GUI thread) and resource lifetimes.
+  tasks:
+    - 'Never write more than 15 tasks. This is a hard limit: if the work does not fit, the change is too big and belongs
+      in slices, each its own change - go back and re-scope rather than compressing several steps into one task.'
+    - Cover only this change's own slice. Do not add tasks for work a later slice will do.
+    - When the design calls for extending `rust-sak`, give that its own tasks - change, test, release, then adopt here -
+      rather than hiding it inside a task about this project.
+    - Group tasks by crate.
+    - Include tasks to verify behaviour on each supported platform when platform-specific code is involved.
+
+operations:
+  apply:
+    guidance:
+      - Implement only this change's tasks. If the design lists later slices, leave them alone - they are separate
+        changes.
+      - Before writing any infrastructure code, re-check ../rust-sak for it. If you find yourself writing a downloader,
+        a retry loop, an archive extractor, a hasher, an image codec wrapper, a cache or a hardware probe, stop - that
+        is a rust-sak module.
+      - Work on `rust-sak` happens in its own repository at ../rust-sak; do not vendor or copy its code into this
+        project, and confirm before pushing anything to it.
+      - Run `cargo fmt --check`, `cargo clippy` and `cargo test` before calling Rust work complete; run the frontend
+        lint, typecheck and test scripts when the frontend changed.
+  archive:
+    guidance:
+      - If this change was one slice of a series, say which slices remain and name the next one to propose, so the
+        series is not dropped half-finished.
+      - Record any parity gap the change knowingly left open, so a later change can pick it up instead of it being
+        forgotten.
+      - If the change added anything to `rust-sak`, note the version it landed in, so this project's dependency on it is
+        traceable.
