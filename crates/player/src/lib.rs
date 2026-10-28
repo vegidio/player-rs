@@ -81,6 +81,13 @@
 //! The video's display size, to size the framebuffer and lay out the player, is in [`State::video_size`] and
 //! announced by [`Event::VideoSizeChanged`].
 //!
+//! # The UI layer
+//!
+//! [`ui`] gives every frontend the Video.js player experience without drawing anything: [`ui::Controls`] takes the
+//! player's events and the user's input, acts on the player, and returns a [`ui::View`] to draw. Frontends forward
+//! every event to it, tick it at [`ui::View::next_deadline`], and only translate input and paint; see the module
+//! docs for the loop and where it deliberately differs from Video.js.
+//!
 //! [`client_api_version`] reports the client API version of the linked library, and [`BINDINGS_CLIENT_API_VERSION`]
 //! the one the [`sys`] bindings were generated from.
 #![warn(missing_docs)]
@@ -92,6 +99,7 @@ pub mod sys;
 
 pub mod error;
 pub mod prelude;
+pub mod ui;
 
 mod builder;
 mod event;

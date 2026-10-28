@@ -148,6 +148,7 @@ impl PlayerBuilder {
             rate: 1.0,
             ended: false,
             video_size: None,
+            buffered: None,
         };
         Player::start(mpv, state, self.autoplay, self.video_output)
     }

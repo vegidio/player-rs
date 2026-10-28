@@ -212,6 +212,41 @@ fn absolute_seek() {
 }
 
 #[test]
+fn fast_seek() {
+    let player = player(Autoplay::Off);
+    let events = player.subscribe();
+    let (_dir, wav) = wav_source();
+    load_source(&player, &events, wav);
+
+    player.scrub(Duration::from_secs(1)).unwrap();
+    wait_for(&events, "the fast seek to complete", |e| *e == Event::Seeked);
+    let position = player.state().position.expect("the position is known after a seek");
+    assert!(position.abs_diff(Duration::from_secs(1)) <= Duration::from_secs(1), "{position:?}");
+}
+
+#[test]
+fn buffered_position() {
+    let player = Player::builder().mpv_option("ao", "null").mpv_option("cache", "yes").build().unwrap();
+    let events = player.subscribe();
+    assert_eq!(player.state().buffered, None, "an idle player has no buffered position");
+
+    let (_dir, wav) = wav_source();
+    load_source(&player, &events, wav);
+    let duration = player.state().duration.unwrap();
+    let near_end = |b: &Option<Duration>| b.is_some_and(|b| b.abs_diff(duration) <= Duration::from_millis(100));
+    // The cache may have reached the end before `Loaded`; the snapshot then already shows it.
+    if !near_end(&player.state().buffered) {
+        wait_for(
+            &events,
+            "the file to be buffered to its end",
+            |e| matches!(e, Event::BufferedChanged(b) if near_end(b)),
+        );
+    }
+    let buffered = player.state().buffered;
+    assert!(near_end(&buffered), "{buffered:?} is not within 0.1 s of {duration:?}");
+}
+
+#[test]
 fn relative_seek() {
     let player = player(Autoplay::Off);
     let events = player.subscribe();
@@ -256,10 +291,11 @@ fn control_with_no_media() {
     player.pause().unwrap();
     player.seek(Seek::To(Duration::from_secs(1))).unwrap();
     player.seek(Seek::By(1.0)).unwrap();
+    player.scrub(Duration::from_secs(1)).unwrap();
 
     let state = player.state();
     assert!(state.idle);
-    assert_eq!((state.position, state.duration), (None, None));
+    assert_eq!((state.position, state.duration, state.buffered), (None, None, None));
 }
 
 #[test]

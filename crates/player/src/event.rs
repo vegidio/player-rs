@@ -38,6 +38,12 @@ pub struct State {
     ///
     /// [`VideoOutput::Null`]: crate::VideoOutput::Null
     pub video_size: Option<(u32, u32)>,
+    /// The media time up to which data is cached ahead of playback, from mpv's `demuxer-cache-time`. `None` while
+    /// unknown or when mpv keeps no demuxer cache for the media.
+    ///
+    /// With mpv's default `cache=auto`, a local file reports only the demuxer's readahead, about a second past the
+    /// position, rather than the whole file; set the mpv option `cache=yes` to cache local files fully.
+    pub buffered: Option<Duration>,
 }
 
 /// Something that happened in a player, received through [`Events`].
@@ -64,6 +70,8 @@ pub enum Event {
     RateChanged(f64),
     /// The video's display size changed; see [`State::video_size`].
     VideoSizeChanged(Option<(u32, u32)>),
+    /// The buffered position changed; see [`State::buffered`].
+    BufferedChanged(Option<Duration>),
     /// A seek started.
     Seeking,
     /// A seek completed and playback continues from the new position.
@@ -181,10 +189,11 @@ enum Property {
     EofReached,
     DWidth,
     DHeight,
+    DemuxerCacheTime,
 }
 
 impl Property {
-    const ALL: [Self; 11] = [
+    const ALL: [Self; 12] = [
         Self::TimePos,
         Self::Duration,
         Self::Pause,
@@ -196,6 +205,7 @@ impl Property {
         Self::EofReached,
         Self::DWidth,
         Self::DHeight,
+        Self::DemuxerCacheTime,
     ];
 
     fn name(self) -> &'static str {
@@ -211,11 +221,21 @@ impl Property {
             Self::EofReached => "eof-reached",
             Self::DWidth => "dwidth",
             Self::DHeight => "dheight",
+            Self::DemuxerCacheTime => "demuxer-cache-time",
         }
     }
 
     fn is_flag(self) -> bool {
-        !matches!(self, Self::TimePos | Self::Duration | Self::Volume | Self::Speed | Self::DWidth | Self::DHeight)
+        !matches!(
+            self,
+            Self::TimePos
+                | Self::Duration
+                | Self::Volume
+                | Self::Speed
+                | Self::DWidth
+                | Self::DHeight
+                | Self::DemuxerCacheTime
+        )
     }
 
     fn from_id(id: u64) -> Option<Self> {
@@ -254,6 +274,7 @@ impl Property {
         match self {
             Self::TimePos => set(&mut state.position, seconds, |v| Some(Event::PositionChanged(v))),
             Self::Duration => set(&mut state.duration, seconds, |v| Some(Event::DurationChanged(v))),
+            Self::DemuxerCacheTime => set(&mut state.buffered, seconds, |v| Some(Event::BufferedChanged(v))),
             Self::Pause => set(&mut state.paused, flag, |v| Some(Event::PausedChanged(v))),
             Self::PausedForCache => set(&mut state.buffering, flag, |v| Some(Event::BufferingChanged(v))),
             Self::Volume => set(&mut state.volume, number? / 100.0, |v| Some(Event::VolumeChanged(v))),
@@ -413,6 +434,7 @@ mod tests {
             rate: 1.0,
             ended: false,
             video_size: None,
+            buffered: None,
         }
     }
 

@@ -4,7 +4,7 @@ A fast, user-friendly video player for Rust, built on [libmpv](https://mpv.io). 
 
 libmpv and everything it depends on (FFmpeg, libplacebo, libass, …) are linked **statically** from the prebuilt archives of [vegidio/binaries-mpv](https://github.com/vegidio/binaries-mpv). Programs built with `player-rs` need neither mpv nor FFmpeg installed.
 
-> **Status:** early. `player-rs` plays media and draws its video into an OpenGL framebuffer the application provides, on every supported platform (rendering on Windows arm64 is not verified by CI, see [Building](#building)). Showing it in a GPUI window, and the GPUI player itself, come in later changes.
+> **Status:** early. `player-rs` plays media and draws its video into an OpenGL framebuffer the application provides, on every supported platform (rendering on Windows arm64 is not verified by CI, see [Building](#building)). Its toolkit-agnostic UI layer (`player::ui`) implements the Video.js control behaviour, ready for a frontend to draw. Showing video in a GPUI window, and the GPUI control bar itself, come in later changes.
 
 ## Workspace
 
@@ -38,7 +38,7 @@ fn main() -> player::Result<()> {
 }
 ```
 
-`Player` is a cheap, cloneable handle usable from any thread. It loads media (`Source::url`, `Source::file`), controls playback (`play`, `pause`, `toggle_pause`, `stop`, `seek`, `set_volume`, `set_muted`, `set_rate`), keeps a `state()` snapshot, and sends `Event`s to any number of subscribers, which can block on them or await them in any async executor. Anything mpv offers that has no typed method yet is reachable through `get_property`, `set_property` and `command`.
+`Player` is a cheap, cloneable handle usable from any thread. It loads media (`Source::url`, `Source::file`), controls playback (`play`, `pause`, `toggle_pause`, `stop`, `seek`, `scrub` for fast keyframe seeks, `set_volume`, `set_muted`, `set_rate`), keeps a `state()` snapshot (including the buffered position, from mpv's demuxer cache), and sends `Event`s to any number of subscribers, which can block on them or await them in any async executor. Anything mpv offers that has no typed method yet is reachable through `get_property`, `set_property` and `command`.
 
 Behaviour follows [Video.js](https://videojs.org) where the two differ:
 
@@ -67,6 +67,33 @@ if render.update() {
 - Create the render context before the first `load`; media loaded before it plays without video.
 - `state().video_size` and `Event::VideoSizeChanged` give the video's display size. The video is letterboxed into the target with black bars.
 - The render context keeps mpv alive, so it and the `Player` can be dropped in either order. Dropping the last `Player` stops playback.
+
+### The UI layer
+
+`player::ui` holds every Video.js interaction rule that is not drawing, so each GUI frontend only translates its input and draws the result, and all of them behave the same. It depends on no GUI toolkit.
+
+```rust
+use player::ui::{self, Focus, Key, Modifiers};
+
+let options = ui::Options::builder().playback_rates([0.5, 1.0, 1.5, 2.0]).poster("poster.jpg").build()?;
+let mut controls = ui::Controls::new(&player, options);
+
+// Forward every event from the frontend's own subscription:
+controls.handle_event(&event, Instant::now());
+// Report input:
+controls.pointer_moved(now);
+let outcome = controls.key(Key::Char('k'), Modifiers::NONE, Focus::Player, now)?; // outcome.handled
+controls.seek_press(0.1, now)?; controls.seek_drag(0.5, now)?; controls.seek_release(0.5, now)?;
+// Draw everything it describes, and tick again at `view.next_deadline`:
+let view = controls.view(now);
+```
+
+- **Options** follow Video.js (`controls`, `poster`, `playbackRates`, `aspectRatio`, `inactivityTimeout`, `userActions`), validated when built.
+- **The view** says what to show (control bar, cursor, big play button, poster, delayed loading spinner, error), the play/pause/replay icon, time labels as Video.js writes them, seek-bar fractions with a hover preview, the volume icon level and the rate label.
+- **Control-bar hiding**: hidden before playback starts and after the inactivity timeout while playing; hovering the control bar or holding a button keeps it shown. Fade timings are `ui::FADE_IN` and `ui::FADE_OUT`.
+- **Seek-bar drags** pause, scrub with fast seeks, land exactly on release and resume, and never end the media by reaching its end.
+- **Keys**: the Video.js seek-bar and volume-bar keys, and the global hotkeys `f` (fullscreen), `m` (mute) and `k`/Space (play). Unlike Video.js, the hotkeys are on by default (`ui::Hotkeys::disabled()` turns them off) and keys held with Ctrl, Alt or Cmd are left to the application.
+- **Fullscreen** is returned as a `ui::Request`, since only the frontend controls its window.
 
 Play a file or URL from the command line:
 

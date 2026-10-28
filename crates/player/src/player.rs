@@ -180,6 +180,18 @@ impl Player {
         self.unless_idle(self.mpv().command(&["seek", &seconds.to_string(), flags]))
     }
 
+    /// Moves the playback position quickly to `position`, possibly landing on the nearest keyframe instead, for
+    /// scrubbing: mpv executes only the latest of several pending seeks, so rapid calls do not queue up. Follow a
+    /// scrub with an exact [`seek`](Self::seek) where the precise position matters.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Command`] if mpv rejects the request while media is loaded.
+    pub fn scrub(&self, position: Duration) -> Result<()> {
+        let seconds = position.as_secs_f64().to_string();
+        self.unless_idle(self.mpv().command(&["seek", &seconds, "absolute+keyframes"]))
+    }
+
     /// Sets the volume, clamped to `0.0..=1.0`. NaN is ignored.
     ///
     /// # Errors
@@ -310,6 +322,7 @@ mod tests {
         let player = player();
         player.seek(Seek::To(Duration::from_secs(1))).unwrap();
         player.seek(Seek::By(-5.0)).unwrap();
+        player.scrub(Duration::from_secs(1)).unwrap();
         player.play().unwrap();
         player.pause().unwrap();
         player.toggle_pause().unwrap();
