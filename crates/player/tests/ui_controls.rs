@@ -30,7 +30,7 @@ impl Harness {
             .build()
             .expect("the player builds");
         let events = player.subscribe();
-        let controls = Controls::new(&player, options);
+        let controls = Controls::new(&player, options, Instant::now());
         Self { player, events, controls, _dir: None }
     }
 
@@ -413,6 +413,25 @@ fn drag_with_unknown_duration() {
     assert!(!view.seekable);
     assert_eq!((view.played, view.hover), (0.0, None));
     assert_eq!(h.player.state().position, None);
+}
+
+#[test]
+fn loading_other_media_ends_a_drag() {
+    let mut h = Harness::new(Autoplay::Off, options());
+    h.load_wav(10);
+    h.controls.seek_press(0.6, Instant::now()).unwrap();
+    h.drain();
+
+    h.load_wav(10);
+    h.drain();
+    assert!(h.controls.view(Instant::now()).played < 0.1, "the played fraction follows the new media");
+
+    // The release belongs to the old media's drag, so it does not seek the new media.
+    h.controls.seek_release(0.6, Instant::now()).unwrap();
+    while let Some(event) = h.events.recv_timeout(Duration::from_millis(300)) {
+        assert_ne!(event, Event::Seeking, "the release sought the new media");
+    }
+    assert!(h.player.state().position.is_some_and(|p| p < Duration::from_secs(1)));
 }
 
 #[test]

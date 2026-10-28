@@ -76,7 +76,7 @@ if render.update() {
 use player::ui::{self, Focus, Key, Modifiers};
 
 let options = ui::Options::builder().playback_rates([0.5, 1.0, 1.5, 2.0]).poster("poster.jpg").build()?;
-let mut controls = ui::Controls::new(&player, options);
+let mut controls = ui::Controls::new(&player, options, Instant::now());
 
 // Forward every event from the frontend's own subscription:
 controls.handle_event(&event, Instant::now());

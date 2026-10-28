@@ -65,7 +65,7 @@ let ui = ui::Options::builder()
     .hotkeys(ui::Hotkeys::default().mute([Key::Char('x')]))
     .build()?;                       // Error::InvalidOption on bad rates / ratio
 
-let mut controls = ui::Controls::new(&player, ui);
+let mut controls = ui::Controls::new(&player, ui, now);
 // frontend loop:
 controls.handle_event(&event, now);              // every Event from its own subscription
 controls.tick(now);                              // at view.next_deadline

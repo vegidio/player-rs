@@ -123,13 +123,14 @@ pub struct View {
 }
 
 impl Controls {
-    /// A controller for `player` with `options`. The player may already have media loaded.
-    pub fn new(player: &Player, options: Options) -> Self {
+    /// A controller for `player` with `options`, created at `now`, which counts as user activity. The player may
+    /// already have media loaded.
+    pub fn new(player: &Player, options: Options, now: Instant) -> Self {
         let state = player.state();
         let started = !state.idle && (!state.paused || state.position.is_some_and(|p| !p.is_zero()));
         Self {
             player: player.clone(),
-            activity: Activity::new(options.inactivity_timeout(), Instant::now()),
+            activity: Activity::new(options.inactivity_timeout(), now),
             options,
             started,
             seeking_since: None,
@@ -154,9 +155,13 @@ impl Controls {
                 // Autoplay unpauses before loading, so no `PausedChanged(false)` follows.
                 self.started = !self.player.state().paused;
                 self.error = None;
+                self.drag = None;
             }
             Event::PausedChanged(false) if !self.player.state().idle => self.started = true,
-            Event::Ended(EndReason::Replaced) => self.started = false,
+            Event::Ended(EndReason::Replaced) => {
+                self.started = false;
+                self.drag = None;
+            }
             Event::Ended(EndReason::Error(message)) => self.error = Some(message.clone()),
             Event::Idle => {
                 self.started = false;
@@ -324,8 +329,9 @@ impl Controls {
         self.player.scrub(bars::time_at(fraction, duration))
     }
 
-    /// The seek bar was released at `fraction`: seeks exactly there, then resumes playback if the media was playing
-    /// when the drag began.
+    /// The seek bar was released at `fraction`: seeks exactly there while the duration is known, then resumes playback
+    /// if the media was playing when the drag began. Loading other media ends a drag, so a release after that does
+    /// nothing.
     ///
     /// # Errors
     ///
@@ -333,8 +339,9 @@ impl Controls {
     pub fn seek_release(&mut self, fraction: f64, now: Instant) -> Result<()> {
         self.activity.input(now);
         let Some(drag) = self.drag.take() else { return Ok(()) };
-        let Some(duration) = seekable(&self.player.state()) else { return Ok(()) };
-        self.player.seek(Seek::To(bars::time_at(fraction, duration)))?;
+        if let Some(duration) = seekable(&self.player.state()) {
+            self.player.seek(Seek::To(bars::time_at(fraction, duration)))?;
+        }
         if drag.was_playing {
             self.player.play()?;
         }
@@ -442,7 +449,7 @@ mod tests {
     fn idle_view() {
         let player = player();
         let poster = Options::builder().poster("poster.jpg").build().unwrap();
-        let controls = Controls::new(&player, poster);
+        let controls = Controls::new(&player, poster, Instant::now());
         let now = Instant::now();
         let view = controls.view(now);
         assert!(view.controls);
@@ -463,7 +470,7 @@ mod tests {
     fn controls_off_view() {
         let player = player();
         let options = Options::builder().controls(false).playback_rates([1.0, 2.0]).build().unwrap();
-        let mut controls = Controls::new(&player, options);
+        let mut controls = Controls::new(&player, options, Instant::now());
         controls.started = true;
         let view = controls.view(Instant::now());
         assert!(!view.controls && !view.control_bar_visible && !view.big_play_button);
@@ -473,7 +480,7 @@ mod tests {
     #[test]
     fn error_view() {
         let player = player();
-        let mut controls = Controls::new(&player, Options::default());
+        let mut controls = Controls::new(&player, Options::default(), Instant::now());
         let now = Instant::now();
         controls.handle_event(&Event::Ended(EndReason::Error("loading failed".into())), now);
         let view = controls.view(now);
@@ -484,7 +491,7 @@ mod tests {
     #[test]
     fn spinner_waits() {
         let player = player();
-        let mut controls = Controls::new(&player, Options::default());
+        let mut controls = Controls::new(&player, Options::default(), Instant::now());
         let start = Instant::now();
         controls.handle_event(&Event::Seeking, start);
         assert!(!controls.view(start + Duration::from_millis(299)).spinner);

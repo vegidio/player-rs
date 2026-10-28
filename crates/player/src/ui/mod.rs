@@ -30,7 +30,7 @@
 //!
 //! let player = Player::builder().build()?;
 //! let options = ui::Options::builder().playback_rates([0.5, 1.0, 1.5, 2.0]).aspect_ratio("16:9").build()?;
-//! let mut controls = ui::Controls::new(&player, options);
+//! let mut controls = ui::Controls::new(&player, options, Instant::now());
 //! let events = player.subscribe();
 //! player.load(Source::url("https://example.com/movie.mp4")?)?;
 //!
