@@ -303,6 +303,13 @@ Run with `examples/play.rs` (debug build) on a local M2 Max, on a Retina display
 - **Loaded before the first frame.** Media with audio showed video. Media **without audio** first stayed black: its load ended at once with `MPV_ERROR_NOTHING_TO_PLAY`, because no render context existed yet. **Decided by the user:** the player now records whether a load was made without a render context, and a surface renderer loads such media again once its video has failed. Either the event thread or `build()` does it, whichever learns last of the other's side; the event thread uses only asynchronous mpv calls. Retested: the video-only clip now shows video.
 - **Closing.** Closing the window while paused exited the process in 0.2 s.
 
+### Change notes: CI (task 3.3)
+
+The manual `test` workflow ran on branch `add-player-4-gpui-macos` (run 40768239195), and the lint job and all six legs passed.
+- **macOS arm64 and x64:** `tests/surface.rs` ran all 24 tests on Apple's software renderer, and `player-gpui` ran its 7 harness tests. On x64 under Rosetta, GPUI's harness also passed.
+- **Linux x64 and arm64, Windows x64 and arm64:** `crates/gpui` built, with the added Linux packages, and ran its 2 tests: the link test, and the black element on platforms without surfaces. `tests/surface.rs` compiles to no tests there, as designed.
+- No leg-specific skip was needed. Windows arm64 keeps the existing skip of OpenGL tests from slice 2, which this change's tests do not depend on.
+
 ## Risks / Trade-offs
 
 - [Apple's software renderer may not support `CGLTexImageIOSurface2D`, or IOSurface FBOs, on the CI VMs] → Task 1.1 is a spike on a CI macOS leg before anything depends on it. If the software renderer cannot bind IOSurfaces, the macOS legs try `GlRenderer::Hardware` (the arm64 VMs expose a paravirtual GPU). If neither works there, the surface tests skip with a message on CI, like Windows arm64 in slice 2, and the gap is recorded here and in the README, with local runs covering them.
