@@ -149,6 +149,8 @@ This replaces the first plan of setting `vid` to `no` and back to its id. Task 1
 - Setting `vid=auto` then has no effect.
 - Setting the track id restarts the video with the position continuous.
 
+Found at verification: mpv re-selects a track with a seek to the current position. A seekable file keeps its position within a frame or two. A source that cannot seek, such as a generated `av://lavfi` source or a live stream, resumes its video at the demuxer's read-ahead instead. In a test, the position jumped from 0.5 s to 2.1 s, and audio held for about 0.4 s to resync. The spec therefore bounds the position change only for seekable media, and the test plays a committed seekable fixture (`tests/fixtures/testsrc-h264-aac.mp4`).
+
 Checking `options/vid` leaves video off when the application turned it off itself. This is done only in `SurfaceRenderer`, which makes the GPUI "load in the view constructor" pattern work. `RenderContext`'s own documented behaviour (slice 2's spec) is unchanged. Alternatives: a `loadfile ... replace` with `start=<pos>` (rejected: it interrupts audio and re-emits `Loaded`, which resets slice 3's started state), and documenting "create the element first" (rejected: GPUI views naturally load in `new`, before the first paint).
 
 ### hwdec default

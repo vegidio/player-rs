@@ -6,6 +6,11 @@
 //! Apple's software OpenGL renderer is used, as on CI; set `PLAYER_TEST_GL=hardware` to use the GPU instead.
 #![cfg(target_os = "macos")]
 
+mod common {
+    pub mod gl;
+}
+
+use common::gl::Gl;
 use objc2_core_video::{
     CVPixelBuffer, CVPixelBufferGetBaseAddressOfPlane, CVPixelBufferGetBytesPerRowOfPlane, CVPixelBufferGetHeight,
     CVPixelBufferGetWidth, CVPixelBufferLockBaseAddress, CVPixelBufferLockFlags, CVPixelBufferUnlockBaseAddress,
@@ -279,6 +284,36 @@ fn second_renderer_fails_and_the_first_keeps_working() {
 }
 
 #[test]
+fn fails_while_a_render_context_exists() {
+    let gl = Gl::new();
+    let player = render_player(Autoplay::Off);
+    // SAFETY: `gl` is current on this thread, where the render context is used and dropped, and outlives it.
+    let mut render = unsafe { RenderContext::new(&player, gl.loader(), || {}) }.expect("the render context is created");
+
+    let result = SurfaceRenderer::builder(&player).gl_renderer(gl_renderer()).build();
+    let Err(Error::Render(message)) = result else {
+        panic!("a surface renderer was created next to a render context: {result:?}")
+    };
+    assert!(message.contains("already has a render context"), "{message}");
+
+    // The render context keeps working, and releases the player for a surface renderer once dropped.
+    let framebuffer = gl.framebuffer(160, 120, [0, 0, 0, 255]);
+    render.update();
+    render
+        .render(
+            RenderTarget { fbo: framebuffer.name(), width: framebuffer.width, height: framebuffer.height },
+            false,
+        )
+        .expect("the render context still renders");
+    gl.delete(framebuffer);
+    drop(render);
+    let (renderer, frames) = renderer(&player, SurfaceFormat::Bgra);
+    renderer.set_size(160, 120);
+    player.load(url(TEST_SOURCE)).unwrap();
+    wait_frame(&renderer, &frames, &player, "the surface renderer to show video", shows_video);
+}
+
+#[test]
 fn recreated_after_drop_publishes_frames() {
     let player = render_player(Autoplay::Off);
     let (first, _frames) = renderer(&player, SurfaceFormat::Bgra);
@@ -459,19 +494,24 @@ fn letterboxing() {
 fn renderer_created_after_load() {
     let player = render_player(Autoplay::On);
     let events = player.subscribe();
-    player.load(url(TEST_SOURCE_WITH_AUDIO)).unwrap();
+    // A seekable file: mpv re-selects the video track with a seek to the current position, which a generated source
+    // cannot do, so its video would resume at the demuxer's read-ahead, more than a second later.
+    player.load(fixture("testsrc-h264-aac.mp4")).unwrap();
     wait_loaded(&events);
     wait_position_past(&events, Duration::from_millis(500));
     let before = player.state().position.unwrap();
+    let start = Instant::now();
 
     let (renderer, frames) = renderer(&player, SurfaceFormat::Nv12);
     renderer.set_size(160, 120);
     wait_frame(&renderer, &frames, &player, "the video to appear", shows_video);
 
+    // Where playback would be had nothing happened, give or take the one second the spec allows.
     let position = player.state().position.unwrap();
+    let expected = before + start.elapsed();
     assert!(
-        position + Duration::from_secs(1) >= before,
-        "playback continues from about where it was: {before:?} before, {position:?} after"
+        position + Duration::from_secs(1) >= before && position <= expected + Duration::from_secs(1),
+        "playback continues from about where it was: {before:?} before, {position:?} after, {expected:?} expected"
     );
     wait_position_past(&events, position + Duration::from_millis(300));
     assert!(!player.state().ended);
@@ -563,9 +603,14 @@ fn software_renderer_switches_to_bilinear_scaling() {
     rig.wait_frame("a scaled video frame", shows_video);
 }
 
-/// The committed H.264 fixture (see `fixtures/README.md`): mpv's generated sources never reach a hardware decoder.
+/// A committed fixture (see `fixtures/README.md`).
+fn fixture(name: &str) -> Source {
+    Source::file(format!("{}/tests/fixtures/{name}", env!("CARGO_MANIFEST_DIR"))).unwrap()
+}
+
+/// The H.264 fixture: mpv's generated sources never reach a hardware decoder.
 fn h264_fixture() -> Source {
-    Source::file(concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/testsrc-h264.mp4")).unwrap()
+    fixture("testsrc-h264.mp4")
 }
 
 /// Plays the H.264 fixture through an NV12 renderer on `gl_renderer` until it shows video, and returns the hardware

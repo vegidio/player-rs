@@ -86,11 +86,19 @@ Published frames SHALL show the video scaled to fit the frame with its display a
 
 ### Requirement: Video when created after loading
 
-A surface renderer created while its player already has media with a video track loaded SHALL make that video appear in its frames without the application reloading the media, and without interrupting audio playback or changing the playback position by more than one second.
+A surface renderer created while its player already has media with a video track loaded SHALL make that video appear in its frames without the application reloading the media, and without interrupting audio playback or, for seekable media, changing the playback position by more than one second. Media without audio, whose load ended with an error because its video could not start without a render context, SHALL be loaded again once, by the core, when a surface renderer exists, whether the load ended before or after the renderer was created; the player SHALL announce the failed load's end with an error, then the media loaded again.
 
 #### Scenario: Renderer created after load
-- **WHEN** a player built with the render video output loads a video, and a surface renderer with a size set is created afterwards
-- **THEN** published frames show the video, not black, and playback continues from about where it was
+- **WHEN** a player built with the render video output loads a seekable video file with audio, and a surface renderer with a size set is created afterwards
+- **THEN** published frames show the video, not black, and playback continues within one second of where it would have been
+
+#### Scenario: Media without audio loaded before the renderer
+- **WHEN** a player built with the render video output loads a video without audio, its load ends with an error, and a surface renderer with a size set is created afterwards
+- **THEN** the player announces the media loaded again, and published frames show the video, not black
+
+#### Scenario: Media without audio loaded just before the renderer
+- **WHEN** a player built with the render video output loads a video without audio and a surface renderer with a size set is created right after, before the load has ended
+- **THEN** published frames show the video, not black
 
 ### Requirement: Surface renderer lifetime
 
