@@ -1,4 +1,4 @@
-//! macOS: the view that draws a player's NV12 surfaces with `paint_surface`, and the keyed state that holds it.
+//! macOS: the view that draws a player's NV12 surfaces with `paint_surface`.
 
 use gpui_kit::*;
 use player::Player;
@@ -7,27 +7,10 @@ use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
 
-/// The element's keyed state. The view is a separate entity so that it can be replaced when the element is given a
-/// different player, and is rendered cached, so the parent re-rendering does not re-render it.
-struct Slot {
-    view: Entity<VideoView>,
-}
-
-/// The video view for `player`, kept under `id` (see [`VideoPlayer`](crate::VideoPlayer)).
-pub(crate) fn view(id: ElementId, player: &Player, window: &mut Window, cx: &mut App) -> AnyElement {
-    let slot = window.use_keyed_state(id, cx, |_, cx| Slot { view: cx.new(|cx| VideoView::new(player, cx)) });
-    let view = slot.update(cx, |slot, cx| {
-        if !Player::ptr_eq(&slot.view.read(cx).player, player) {
-            // The previous view, and with it its renderer, is released once nothing holds it.
-            slot.view = cx.new(|cx| VideoView::new(player, cx));
-        }
-        slot.view.clone()
-    });
-    view.cached(StyleRefinement::default().size_full()).into_any_element()
-}
-
-/// Owns the player's surface renderer and repaints when it publishes a frame.
+/// Owns the player's surface renderer and repaints when it publishes a frame. Kept in the element's keyed state (see
+/// [`VideoPlayer`](crate::VideoPlayer)) and rendered cached, so the parent re-rendering does not re-render it.
 pub(crate) struct VideoView {
+    #[cfg_attr(not(test), expect(dead_code, reason = "kept with its renderer, read by the tests"))]
     player: Player,
     /// `None` if the renderer could not be created: the view then stays black.
     renderer: Option<Arc<SurfaceRenderer>>,
@@ -40,7 +23,7 @@ pub(crate) struct VideoView {
 }
 
 impl VideoView {
-    fn new(player: &Player, cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(player: &Player, cx: &mut Context<Self>) -> Self {
         // The renderer only signals; a frame already waiting covers any that arrive before it is handled.
         let (signal, frames) = flume::bounded(1);
         let renderer = SurfaceRenderer::builder(player)
@@ -197,10 +180,14 @@ pub(crate) mod tests {
     impl Render for Parent {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
             self.renders += 1;
-            let videos =
-                self.players.iter().enumerate().map(|(id, player)| {
-                    VideoPlayer::new(ElementId::Integer(id as u64), player).w(px(320.)).h(px(180.))
-                });
+            // Bare video: the controls re-render with the played bar, which these tests do not measure.
+            let bare = player::ui::Options::builder().controls(false).build().unwrap();
+            let videos = self.players.iter().enumerate().map(|(id, player)| {
+                VideoPlayer::new(ElementId::Integer(id as u64), player)
+                    .options(bare.clone())
+                    .w(px(320.))
+                    .h(px(180.))
+            });
             div().size_full().children(self.show.then_some(videos).into_iter().flatten())
         }
     }

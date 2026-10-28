@@ -1,30 +1,80 @@
-//! [`VideoPlayer`]: a player's video as a GPUI element.
+//! [`VideoPlayer`]: a player's video and its Video.js controls as a GPUI element.
 
+use crate::controls::{ControlsView, FullscreenCallback};
+#[cfg(target_os = "macos")]
+use crate::video::VideoView;
 use gpui_kit::*;
-use player::Player;
+use player::{Player, ui};
+use std::rc::Rc;
 
-/// Shows a [`Player`]'s video, letterboxed on black, and repaints as frames arrive. Size and position it like any
+/// Shows a [`Player`]'s video, letterboxed on black, with Video.js's controls over it. Size and position it like any
 /// `div`.
 ///
-/// Its state, including the player's video surfaces, is kept per element id for as long as an element with that id is
-/// rendered in consecutive frames, so the parent view can re-render freely. Rendering it with a different player under
-/// the same id switches to that player's video. Once no element with the id is rendered, the state is released and the
-/// player keeps playing without video.
+/// Its state, including the player's video surfaces and its controls, is kept per element id for as long as an element
+/// with that id is rendered in consecutive frames, so the parent view can re-render freely. Rendering it with a
+/// different player under the same id switches to that player. Once no element with the id is rendered, the state is
+/// released and the player keeps playing without video.
 ///
 /// The player must be built with [`VideoOutput::Render`](player::VideoOutput::Render). Video is shown on macOS only:
-/// on Windows and Linux the element is black, while audio and control keep working.
+/// on Windows and Linux the element is black, while audio and the controls keep working.
 #[derive(IntoElement)]
 pub struct VideoPlayer {
     id: ElementId,
-    #[cfg_attr(not(target_os = "macos"), expect(dead_code, reason = "no video surfaces on this platform yet"))]
     player: Player,
+    options: ui::Options,
+    on_fullscreen_change: Option<FullscreenCallback>,
     style: StyleRefinement,
+}
+
+/// The element's keyed state. The views are separate entities, so they can be replaced when the element is given a
+/// different player, and are rendered cached, so neither the parent re-rendering nor video frames re-render the
+/// controls.
+struct Slot {
+    #[cfg(target_os = "macos")]
+    video: Entity<VideoView>,
+    controls: Entity<ControlsView>,
+}
+
+impl Slot {
+    fn new(player: &Player, options: ui::Options, window: &mut Window, cx: &mut Context<Self>) -> Self {
+        Self {
+            #[cfg(target_os = "macos")]
+            video: cx.new(|cx| VideoView::new(player, cx)),
+            controls: cx.new(|cx| ControlsView::new(player, options, window, cx)),
+        }
+    }
 }
 
 impl VideoPlayer {
     /// Creates the element for `player`, keeping its state under `id`.
     pub fn new(id: impl Into<ElementId>, player: &Player) -> Self {
-        Self { id: id.into(), player: player.clone(), style: StyleRefinement::default() }
+        Self {
+            id: id.into(),
+            player: player.clone(),
+            options: ui::Options::default(),
+            on_fullscreen_change: None,
+            style: StyleRefinement::default(),
+        }
+    }
+
+    /// The player's UI options: controls, playback rates, aspect ratio, hotkeys and so on. Defaults to
+    /// [`ui::Options::default`], which shows the controls.
+    ///
+    /// As Video.js reads its options at construction, they are read when the element's state is created and when it
+    /// is given a different player; changing them on a later render under the same id and player has no effect.
+    /// With an [aspect ratio](ui::OptionsBuilder::aspect_ratio), the element's height follows its width, as in
+    /// Video.js's fluid mode, unless a height is set on the element.
+    pub fn options(mut self, options: ui::Options) -> Self {
+        self.options = options;
+        self
+    }
+
+    /// Called with `true` when the player enters fullscreen and with `false` when it leaves, including when the window
+    /// leaves fullscreen by other means. The player's fullscreen is its window's, so an app typically lays out the
+    /// player alone while it is on.
+    pub fn on_fullscreen_change(mut self, callback: impl Fn(bool, &mut Window, &mut App) + 'static) -> Self {
+        self.on_fullscreen_change = Some(Rc::new(callback));
+        self
     }
 }
 
@@ -35,17 +85,32 @@ impl Styled for VideoPlayer {
 }
 
 impl RenderOnce for VideoPlayer {
-    #[cfg_attr(
-        not(target_os = "macos"),
-        expect(unused_variables, reason = "no video surfaces on this platform yet")
-    )]
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let mut root = div().id(self.id.clone()).bg(black()).overflow_hidden();
-        root.style().refine(&self.style);
+        let Self { id, player, options, on_fullscreen_change, style } = self;
+        let slot = window.use_keyed_state(id.clone(), cx, |window, cx| Slot::new(&player, options.clone(), window, cx));
+        let controls = slot.update(cx, |slot, cx| {
+            if !Player::ptr_eq(slot.controls.read(cx).player(), &player) {
+                // The previous views, and with them the renderer, are released once nothing holds them.
+                *slot = Slot::new(&player, options, window, cx);
+            }
+            slot.controls.clone()
+        });
+        // Not an option: the latest callback applies. Nothing drawn depends on it, so the view is not notified.
+        let aspect_ratio = controls.update(cx, |controls, _| {
+            controls.on_fullscreen_change = on_fullscreen_change;
+            controls.options().aspect_ratio()
+        });
+
+        let mut root = div().id(id).relative().bg(black()).overflow_hidden();
+        if let Some(ratio) = aspect_ratio {
+            // Video.js's fluid mode. The app's style is refined over it, so a height set on the element still wins.
+            root = root.aspect_ratio((ratio.width() / ratio.height()) as f32);
+        }
+        root.style().refine(&style);
 
         #[cfg(target_os = "macos")]
-        let root = root.child(crate::video::view(self.id, &self.player, window, cx));
-        root
+        let root = root.child(slot.read(cx).video.clone().cached(StyleRefinement::default().size_full()));
+        root.child(controls.cached(StyleRefinement::default().absolute().top_0().left_0().size_full()))
     }
 }
 

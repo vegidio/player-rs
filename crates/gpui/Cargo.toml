@@ -16,15 +16,21 @@ name = "player_gpui"
 
 [dependencies]
 player-rs = { path = "../player", version = "26.10.0" }
-# GPUI itself, through GPUI-Kit. Without default features this is GPUI and its platform only; the app's own `gpui-kit`
-# features (components, assets, `gpui-fast`) unify with it, so the element follows the backend the app picked.
-gpui-kit = { version = "0.8", default-features = false }
+# GPUI through GPUI-Kit, with its components (icons, tooltips, the spinner) and its Lucide icons. These are GPUI-Kit's
+# default features, so apps already have them on; the app's own features (`gpui-fast` among them) unify with these, so
+# the element follows the backend the app picked. 0.8.1 brings the `icon_assets!` macro.
+gpui-kit = { version = "0.8.1", default-features = false, features = ["component", "assets"] }
 
-# The video element's frame subscription and its error logging (GPUI's own logging facade). Video is macOS-only.
+# Logging of requests mpv rejects, and of video that cannot be shown: GPUI's own logging facade.
+log = "0.4"
+
+# The video element's frame subscription. Video is macOS-only.
 [target.'cfg(target_os = "macos")'.dependencies]
 flume = "0.12"
-log = "0.4"
 
 [dev-dependencies]
 # Headless windows for the element's tests.
-gpui-kit = { version = "0.8", default-features = false, features = ["test-support"] }
+gpui-kit = { version = "0.8.1", default-features = false, features = ["component", "assets", "test-support"] }
+# RAII temporary directories for the WAV media of the control tests. A git dependency without a version is stripped by
+# `cargo publish`, so the crate stays publishable.
+rust-sak = { git = "https://github.com/vegidio/rust-sak", tag = "26.10.1", default-features = false, features = ["fs"] }

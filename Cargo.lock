@@ -2736,6 +2736,7 @@ dependencies = [
  "gpui-component",
  "gpui-fast",
  "gpui-fast-platform",
+ "gpui-kit-assets",
  "gpui-pre",
  "gpui-pre-macros",
  "gpui-pre-platform",
@@ -5370,6 +5371,7 @@ dependencies = [
  "gpui-kit",
  "log",
  "player-rs",
+ "rust-sak",
 ]
 
 [[package]]

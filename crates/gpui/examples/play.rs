@@ -1,22 +1,24 @@
-//! Plays a local file in a resizable window, for checking the video element by hand.
+//! Plays a local file in a resizable window with Video.js controls, for checking the player element by hand.
 //!
 //! ```sh
 //! cargo run -p player-gpui --example play -- path/to/movie.mp4
 //! ```
 //!
-//! Space toggles pause. Once a second it prints how often the window re-rendered (once per video frame while playing,
-//! not at all while paused) and the hardware decoder in use.
+//! The controls' hotkeys work once the player is clicked: `k` or Space toggles pause, `m` mutes and `f` toggles
+//! fullscreen. Once a second it prints how often the window re-rendered (once per video frame while playing, plus the
+//! controls' own changes, and not at all while paused and idle) and the hardware decoder in use. Fullscreen changes are
+//! printed as they happen.
 
 use gpui_kit::*;
 use player::prelude::*;
+use player::ui;
 use player_gpui::VideoPlayer;
 use std::process::ExitCode;
 use std::time::Duration;
 
-gpui_kit::actions!(play, [TogglePause]);
-
 struct Play {
     player: Player,
+    options: ui::Options,
     renders: usize,
     _report: Task<()>,
 }
@@ -36,19 +38,20 @@ impl Play {
                 }
             }
         });
-        Self { player, renders: 0, _report: report }
+        let options = ui::Options::builder().playback_rates([0.5, 1.0, 1.5, 2.0]).build().expect("valid options");
+        Self { player, options, renders: 0, _report: report }
     }
 }
 
 impl Render for Play {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         self.renders += 1;
-        div()
-            .size_full()
-            .on_action(cx.listener(|play, _: &TogglePause, _, _| {
-                let _ = play.player.toggle_pause();
-            }))
-            .child(VideoPlayer::new("video", &self.player).size_full())
+        div().size_full().child(
+            VideoPlayer::new("video", &self.player)
+                .options(self.options.clone())
+                .on_fullscreen_change(|on, _, _| eprintln!("fullscreen: {on}"))
+                .size_full(),
+        )
     }
 }
 
@@ -65,9 +68,9 @@ fn main() -> ExitCode {
         }
     };
 
-    gpui_kit::application().run(move |cx| {
+    // The player's icons, with GPUI-Kit's default bundle behind them.
+    gpui_kit::application().with_assets(player_gpui::Assets).run(move |cx| {
         gpui_kit::init(cx);
-        cx.bind_keys([KeyBinding::new("space", TogglePause, None)]);
         cx.on_window_closed(|cx, _| cx.quit()).detach();
 
         let player = Player::builder()

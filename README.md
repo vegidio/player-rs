@@ -4,19 +4,19 @@ A fast, user-friendly video player for Rust, built on [libmpv](https://mpv.io). 
 
 libmpv and everything it depends on (FFmpeg, libplacebo, libass, …) are linked **statically** from the prebuilt archives of [vegidio/binaries-mpv](https://github.com/vegidio/binaries-mpv). Programs built with `player-rs` need neither mpv nor FFmpeg installed.
 
-> **Status:** early. `player-rs` plays media and draws its video into an OpenGL framebuffer the application provides, on every supported platform (rendering on Windows arm64 is not verified by CI, see [Building](#building)). On macOS it also renders into IOSurfaces that Metal toolkits can show without a copy, and `player-gpui` shows the video in a GPUI window. Video in GPUI on Windows and Linux, and the GPUI control bar (from the toolkit-agnostic `player::ui` layer, which already implements the Video.js control behaviour), come in later changes.
+> **Status:** early. `player-rs` plays media and draws its video into an OpenGL framebuffer the application provides, on every supported platform (rendering on Windows arm64 is not verified by CI, see [Building](#building)). On macOS it also renders into IOSurfaces that Metal toolkits can show without a copy. `player-gpui` shows the video in a GPUI window with Video.js's controls, from the toolkit-agnostic `player::ui` layer. Video in GPUI on Windows and Linux, and the Video.js menus, captions and poster, come in later changes.
 
 ## Workspace
 
 | Path            | Package       | Library       | Purpose                                                                                                       |
 |-----------------|---------------|---------------|---------------------------------------------------------------------------------------------------------------|
 | `crates/player` | `player-rs`   | `player`      | Core crate: downloads and links libmpv, raw FFI bindings (`player::sys`), the safe API. No GUI dependency.    |
-| `crates/gpui`   | `player-gpui` | `player_gpui` | The player UI for [GPUI](https://gpui.rs) apps: the `VideoPlayer` element. Goes through `player-rs`, never libmpv. |
+| `crates/gpui`   | `player-gpui` | `player_gpui` | The player UI for [GPUI](https://gpui.rs) apps: the `VideoPlayer` element, with Video.js's controls. Goes through `player-rs`, never libmpv. |
 | `xtask`         | `xtask`       | -             | Dev-only tooling (not published): regenerates the FFI bindings.                                               |
 
 ## Usage
 
-```rust
+```rust,no_run
 use player::prelude::*;
 
 fn main() -> player::Result<()> {
@@ -50,7 +50,7 @@ Behaviour follows [Video.js](https://videojs.org) where the two differ:
 
 Build the player with `VideoOutput::Render` and create a `RenderContext` from your toolkit's OpenGL context. mpv then draws each frame into a framebuffer you own, doing decoding, scaling, colour conversion and subtitles on the GPU, without copying frames through the CPU:
 
-```rust
+```rust,ignore
 let player = Player::builder().video_output(VideoOutput::Render).build()?;
 // SAFETY: the GL context is current on this thread, where `render` is used and dropped, and outlives it.
 let mut render = unsafe { RenderContext::new(&player, get_proc_address, move || wake_render_thread())? };
@@ -70,7 +70,7 @@ if render.update() {
 
 On macOS, `VideoOutput::Render` players also use VideoToolbox hardware decoding by default (`mpv_option("hwdec", "no")` turns it off), and `player::macos::SurfaceRenderer` serves toolkits that draw with Metal. It owns a render thread and an offscreen OpenGL context, and publishes each frame as an IOSurface-backed `CVPixelBuffer` (BGRA, or NV12 for GPUI), with no `unsafe` code and no copy through the CPU:
 
-```rust
+```rust,ignore
 let renderer = SurfaceRenderer::builder(&player).format(SurfaceFormat::Nv12).on_frame(|| request_repaint()).build()?;
 renderer.set_size(width_px, height_px);
 // When painting: renderer.latest() -> Option<Frame>, with frame.pixel_buffer()
@@ -80,16 +80,51 @@ Media loaded before the surface renderer exists still shows its video. NV12 halv
 
 ### GPUI
 
-`player-gpui` adds the `VideoPlayer` element to apps built with [GPUI-Kit](https://gpui-kit.com) **0.8** (the app must use the same `gpui-kit` minor version):
+`player-gpui` adds the `VideoPlayer` element, a video player with [Video.js](https://videojs.org)'s controls, to apps built with [GPUI-Kit](https://gpui-kit.com) **0.8.1** or a later 0.8 (the app must use the same `gpui-kit` minor version). The app calls `gpui_kit::init(cx)`, which the controls' tooltips and spinner need, and registers `player_gpui::Assets`, which serves the controls' icons and falls back to GPUI-Kit's default icons. An app with an asset source of its own composes `player_gpui::Icons`, the player's extra icons alone, into it instead.
 
-```rust
+```rust,no_run
+use gpui_kit::*;
+use player::prelude::*;
+use player::ui;
 use player_gpui::VideoPlayer;
 
-// In a view's `render`, for a player built with `VideoOutput::Render`:
-div().size_full().child(VideoPlayer::new("movie", &self.player).size_full())
+struct Movie {
+    player: Player,
+    options: ui::Options,
+}
+
+impl Render for Movie {
+    fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+        div().size_full().child(
+            VideoPlayer::new("movie", &self.player)
+                .options(self.options.clone())
+                .on_fullscreen_change(|on, _, _| println!("fullscreen: {on}"))
+                .size_full(),
+        )
+    }
+}
+
+fn main() {
+    gpui_kit::application().with_assets(player_gpui::Assets).run(|cx| {
+        gpui_kit::init(cx);
+        let player = Player::builder().video_output(VideoOutput::Render).build().expect("the player builds");
+        player.load(Source::file("movie.mp4").expect("the file exists")).expect("the file loads");
+        let options = ui::Options::builder().playback_rates([0.5, 1.0, 1.5, 2.0]).build().expect("valid options");
+        gpui_kit::open_window(WindowOptions::default(), cx, |_, cx| cx.new(|_| Movie { player, options }))
+            .expect("the window opens");
+    });
+}
 ```
 
-It shows the video upright and letterboxed on black, at the element's size in device pixels. It repaints for each new frame and not while paused. Its state is kept per element id, so re-rendering the parent does not restart the video. Each frame re-renders the views the element is in, as for any repainting GPUI view, so keep those views cheap. Video is shown on **macOS only** for now; on Windows and Linux the element is black while audio plays. Try it with:
+- **Video** is shown upright and letterboxed on black, at the element's size in device pixels. It repaints for each new frame and not while paused. Video is shown on **macOS only** for now; on Windows and Linux the element is black while audio plays and the controls work.
+- **Controls** are Video.js 8's default skin, drawn from `player::ui`: the control bar (play, mute with a volume bar that expands on hover, seek bar with buffered part and hover time, remaining time, a playback-rate button when rates are set, fullscreen), the centred big play button, the loading spinner and the error display. The bar fades out after the inactivity timeout while playing. Clicking the video toggles play and double-clicking toggles fullscreen.
+- **Keyboard**: clicking the player focuses it, and Tab moves through the controls. The `player::ui` hotkeys and seek/volume-bar keys apply as configured; keys the player does not handle, and every key held with Ctrl, Alt or Cmd, go on to the app. The `player_gpui::TogglePlay`, `ToggleMute` and `ToggleFullscreen` actions let app menus drive the focused player.
+- **Controls are on by default.** `.options(...)` takes `player::ui::Options`; for bare video, pass `ui::Options::builder().controls(false).build()?`. As in Video.js, options are read once: when the element's state is created and when it is given a different player. With an aspect ratio set, the element's height follows its width (Video.js's fluid mode).
+- **Fullscreen is the window's.** A GPUI element cannot fill the screen alone, so the fullscreen control, `f`, double-click and Escape (to leave) toggle the window's fullscreen. `.on_fullscreen_change(...)` tells the app, including when the window leaves fullscreen by other means, so it can show the player alone while fullscreen.
+- **State** is kept per element id, so re-rendering the parent does not restart the video. Each video frame, and each change of the controls (the seek bar moves a pixel at a time), re-renders the views the element is in, as for any repainting GPUI view, so keep those views cheap.
+- **Not yet:** the cursor stays visible while the user is inactive (GPUI has no way to hide it on demand), and the rate button cycles the rates instead of opening Video.js's menu. Menus (rates, tracks), captions and the poster come in later changes.
+
+Try it with:
 
 ```sh
 cargo run -p player-gpui --example play -- path/to/movie.mp4
@@ -99,7 +134,7 @@ cargo run -p player-gpui --example play -- path/to/movie.mp4
 
 `player::ui` holds every Video.js interaction rule that is not drawing, so each GUI frontend only translates its input and draws the result, and all of them behave the same. It depends on no GUI toolkit.
 
-```rust
+```rust,ignore
 use player::ui::{self, Focus, Key, Modifiers};
 
 let options = ui::Options::builder().playback_rates([0.5, 1.0, 1.5, 2.0]).poster("poster.jpg").build()?;
