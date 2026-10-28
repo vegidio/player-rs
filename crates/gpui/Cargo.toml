@@ -16,3 +16,15 @@ name = "player_gpui"
 
 [dependencies]
 player-rs = { path = "../player", version = "26.10.0" }
+# GPUI itself, through GPUI-Kit. Without default features this is GPUI and its platform only; the app's own `gpui-kit`
+# features (components, assets, `gpui-fast`) unify with it, so the element follows the backend the app picked.
+gpui-kit = { version = "0.8", default-features = false }
+
+# The video element's frame subscription and its error logging (GPUI's own logging facade). Video is macOS-only.
+[target.'cfg(target_os = "macos")'.dependencies]
+flume = "0.12"
+log = "0.4"
+
+[dev-dependencies]
+# Headless windows for the element's tests.
+gpui-kit = { version = "0.8", default-features = false, features = ["test-support"] }

@@ -442,6 +442,14 @@ fn copies_control_the_same_instance() {
 }
 
 #[test]
+fn same_player_check() {
+    let other = player(Autoplay::Off);
+    let player = player(Autoplay::Off);
+    assert!(Player::ptr_eq(&player, &player.clone()));
+    assert!(!Player::ptr_eq(&player, &other));
+}
+
+#[test]
 fn control_from_another_thread() {
     let player = player(Autoplay::Off);
     let events = player.subscribe();

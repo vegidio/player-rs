@@ -39,7 +39,7 @@ Changes from the plan in slice 3's table:
 **Goals:**
 - A safe, toolkit-agnostic macOS API that turns a `Player` into a stream of GPU surfaces. GPUI uses the NV12 format, and an egui-wgpu or Metal app could use BGRA, with no GL or `unsafe` in either.
 - No CPU copy of frames anywhere in the shipping path, including with VideoToolbox decoding.
-- The GPUI repaint cost scales with the video element, not the whole app view.
+- A video frame repaints only what GPUI must repaint for any notifying view: the element and the views it is inside, once per frame (corrected in task 2.2, see the GPUI element section).
 - Deterministic tests on CI's software renderer, with real hardware decoding checked locally.
 
 **Non-Goals:**
@@ -142,13 +142,20 @@ exit:  drop RenderContext (GL current) → delete GL objects → CGLSetCurrentCo
 
 ### Video when created after loading
 
-After a successful `build()`, if the player has media loaded and `vid` is a track id (not `no`), the builder sets `vid` to `no` and then back to that id. mpv re-initialises the video decoder and VO, now with a render context, while audio and the position continue. This is done only in `SurfaceRenderer`, which makes the GPUI "load in the view constructor" pattern work. `RenderContext`'s own documented behaviour (slice 2's spec) is unchanged. Alternatives: a `loadfile ... replace` with `start=<pos>` (rejected: it interrupts audio and re-emits `Loaded`, which resets slice 3's started state), and documenting "create the element first" (rejected: GPUI views naturally load in `new`, before the first paint).
+After a successful `build()`, the builder selects the media's first video track again (`vid = <id>`), but only when all three hold: the media has a video track, `vid` reads `no`, and the `vid` option (`options/vid`) is not `no`. mpv re-initialises the video decoder and VO, now with a render context, while audio and the position continue.
+
+This replaces the first plan of setting `vid` to `no` and back to its id. Task 1.5 found that the first plan never fires:
+- When the VO fails to start because no render context exists, mpv deselects the video track itself, so `vid` already reads `no`, while `options/vid` keeps the user's `auto`.
+- Setting `vid=auto` then has no effect.
+- Setting the track id restarts the video with the position continuous.
+
+Checking `options/vid` leaves video off when the application turned it off itself. This is done only in `SurfaceRenderer`, which makes the GPUI "load in the view constructor" pattern work. `RenderContext`'s own documented behaviour (slice 2's spec) is unchanged. Alternatives: a `loadfile ... replace` with `start=<pos>` (rejected: it interrupts audio and re-emits `Loaded`, which resets slice 3's started state), and documenting "create the element first" (rejected: GPUI views naturally load in `new`, before the first paint).
 
 ### hwdec default
 
 In `PlayerBuilder::build`, on `cfg(target_os = "macos")` with `VideoOutput::Render`, `("hwdec", "videotoolbox")` joins the embedding defaults. These are applied before raw options, so `mpv_option("hwdec", ..)` overrides it.
 - mpv's VideoToolbox GL interop maps each decoded `CVPixelBuffer`'s IOSurface into GL with `CGLTexImageIOSurface2D` on the current CGL context, so with the hardware renderer, decode → render → NV12 → Metal never touches the CPU.
-- With the software renderer, or a codec VideoToolbox lacks, interop or decoder initialisation fails and mpv falls back to software decoding by itself.
+- Where interop or decoder initialisation fails (a codec VideoToolbox lacks, or no VideoToolbox, as under Rosetta), mpv falls back to software decoding by itself. Apple's software renderer does support the interop on Apple Silicon (see the spike's outcome), so it is not a reliable way to force the fallback.
 - `videotoolbox` is preferred over `auto-safe` because it names the one zero-copy method intended here, and it cannot pick a `-copy` variant.
 - The same default applies to slice 2's host-FBO `RenderContext` on macOS. Its tests use the software renderer and pass through the fallback.
 
@@ -183,7 +190,11 @@ VideoView (Render):
                    window.paint_surface(ObjectFit::Contain.get_bounds(bounds, f.size), f.pixel_buffer().clone()) })
 ```
 
-- **Why a `Slot` holding a separate `VideoView` entity.** `use_keyed_state` notifies the *parent* view whenever the keyed entity notifies. If that entity notified per frame, the app's whole view would re-render at the video's frame rate. Instead the frame task notifies `VideoView`, which is not the keyed entity. It renders through `AnyView::cached`, so per frame only it is re-rendered and repainted, and the parent's cached output is reused.
+- **Why a `Slot` holding a separate `VideoView` entity.** Replacing the view entity is how a different player under the same id gets a fresh renderer, and `AnyView::cached` keeps the view from re-rendering when the parent re-renders for its own reasons.
+- **Per-frame cost (corrected in task 2.2).** The first plan was that per frame only `VideoView` re-renders, with the parent's cached output reused. That does not hold in GPUI 0.3.10. `cx.notify()` marks every ancestor view dirty (`Window::mark_view_dirty`), and GPUI has no paint-only invalidation. So each frame re-renders every view from the window root down to the element, even a parent shown with `.cached()`. In the harness, a cached parent rendered 39 times for 38 frames.
+  - This is GPUI's cost for any animated view.
+  - Notifying through the keyed entity instead would cost the same.
+  - **Decided by the user:** accept it. The harness test checks that the parent re-renders at most once per published frame, that its state survives, and that the video view repaints per frame. The crate docs tell apps to keep the views around a video element cheap, and to show expensive siblings as cached views, which a frame does not re-render.
 - **Sizing at prepaint.** Bounds are known there, and `set_size` only stores a value and signals the render thread. Until a frame of the new size arrives, the previous frame is painted with `ObjectFit::Contain`, so a resize never stretches the picture. An NV12 frame one device pixel larger than the bounds (odd sizes) is fitted the same way.
 - **No repaint when idle.** Only `on_frame` notifies, and it fires only when mpv renders or the size changes. A paused video therefore does not keep the window busy (spec).
 - **Errors.** If `build()` fails (for example the player was not built with `VideoOutput::Render`), `VideoView` keeps no renderer, paints black, and logs the error once with `log::warn!`, as GPUI itself logs.
@@ -260,6 +271,38 @@ Everything platform- and GL-specific is in `crates/player`, behind `cfg(target_o
 - **macOS**: the legs run `tests/surface.rs` on the software renderer, arm64 natively and x64 under Rosetta.
 - **Windows**: both legs build `crates/gpui` and run its non-macOS tests.
 
+### Outcome of the spike (task 1.1)
+
+A throwaway test (since deleted) ran on a local M2 Max and on the CI macOS legs, on the `spike/add-player-4-iosurface` branch (also deleted). Each leg created a 3.2 core CGL context, bound IOSurface-backed `CVPixelBuffer`s with `CGLTexImageIOSurface2D` (32BGRA plane 0 as `GL_RGBA8`/`GL_BGRA`; NV12 plane 0 as `GL_R8` and plane 1 as `GL_RG8` at half size) to rectangle-texture FBOs, cleared them and read them back with `CVPixelBufferLockBaseAddress`. It then played a 160×120 H.264 file through mpv with `hwdec=videotoolbox` and read `hwdec-current`.
+
+| Leg | Software CGL: FBOs and readback | Software CGL: `hwdec-current` | Hardware CGL |
+|---|---|---|---|
+| Local, Apple Silicon (M2 Max) | complete, exact | `videotoolbox` | FBOs complete, readback exact, `hwdec-current = videotoolbox` |
+| CI macOS arm64 | complete, exact | `videotoolbox` | no pixel format (`kCGLBadPixelFormat`, 10002) |
+| CI macOS x64 (Rosetta) | complete, exact | `no` (software decoding) | no pixel format (10002) |
+
+Decisions that follow:
+- The Risks entry's fallback is not needed. The surface tests run on both CI legs with the software renderer, without a skip.
+- The CI VMs expose no accelerated CGL renderer, so `GlRenderer::Hardware` fails there and `GlRenderer::Auto` falls back to software, as designed.
+- Apple's software renderer supports mpv's VideoToolbox interop on Apple Silicon. So the "software renderer fallback" test checks only that frames are published, whichever decoder is active (as the spec says). It sees VideoToolbox on arm64 and software decoding on x64. Only the `PLAYER_TEST_GL=hardware` test asserts `videotoolbox`.
+
+### Apple's software renderer (found in task 1.6)
+
+Two quirks surfaced once the surface tests ran on Apple's software renderer. Neither appears on the GPU.
+- **Fences.** The software renderer signals a fence before its writes have reached the IOSurface's memory. A CPU or Metal reader can then see a stale or empty surface. When the context is the software renderer, the render thread calls `glFinish` instead of waiting on a fence. On the GPU it keeps the fenced wait. The CGL context records which renderer `Auto` ended up on.
+- **Scaling.** mpv's default scalers sample lookup-table textures, and the software renderer draws scaled video with them as solid black (sometimes, depending on what was drawn before). Slice 2's tests never scaled, so they never saw this. With `scale=bilinear` it is reliable, and bilinear is also the only scaling a CPU renderer can afford. **Decided by the user:** when a surface renderer ends up on the software renderer, `build()` sets the player's `scale`, `dscale` and `cscale` to `bilinear`. This is documented on `GlRenderer::Software` and on the builder. It overrides a scaler the application chose on that player, but only on the software path.
+
+### Change notes: manual verification (task 2.3)
+
+Run with `examples/play.rs` (debug build) on a local M2 Max, on a Retina display.
+- **Upright, colours.** A 640x480 `testsrc` clip, compared with FFmpeg's decoded reference frame of the same file (mpv is not installed on this machine): same bar order and colours, gradient band at the bottom.
+- **Letterboxing.** The 4:3 clip is pillarboxed in the 16:9 window, and letterboxed after resizing the window to 500x700 points.
+- **Sharp on Retina.** The window is 1000x1400 device pixels at scale 2, and frames are requested at bounds x scale factor (checked by the harness test).
+- **4K HEVC.** A 3840x2160 HEVC clip at 30 fps reported `hwdec-current=videotoolbox`. The whole process used 22-29% of one core, in a debug build.
+- **Idle.** While paused, the window re-rendered 0 times per second. While playing, it re-rendered once per frame (about 31 per second for 30 fps).
+- **Loaded before the first frame.** Media with audio showed video. Media **without audio** first stayed black: its load ended at once with `MPV_ERROR_NOTHING_TO_PLAY`, because no render context existed yet. **Decided by the user:** the player now records whether a load was made without a render context, and a surface renderer loads such media again once its video has failed. Either the event thread or `build()` does it, whichever learns last of the other's side; the event thread uses only asynchronous mpv calls. Retested: the video-only clip now shows video.
+- **Closing.** Closing the window while paused exited the process in 0.2 s.
+
 ## Risks / Trade-offs
 
 - [Apple's software renderer may not support `CGLTexImageIOSurface2D`, or IOSurface FBOs, on the CI VMs] → Task 1.1 is a spike on a CI macOS leg before anything depends on it. If the software renderer cannot bind IOSurfaces, the macOS legs try `GlRenderer::Hardware` (the arm64 VMs expose a paravirtual GPU). If neither works there, the surface tests skip with a message on CI, like Windows arm64 in slice 2, and the gap is recorded here and in the README, with local runs covering them.
@@ -267,7 +310,7 @@ Everything platform- and GL-specific is in `crates/player`, behind `cfg(target_o
 - [On dual-GPU Intel Macs, the CGL context may run on the integrated GPU while GPUI's Metal device is the discrete one, and the driver then migrates the IOSurface between GPUs] → Recorded as a known gap, untested (no such hardware). The fix belongs to a later slice: pick the CGL virtual screen whose renderer matches GPUI's `MTLDevice` registry id. Apple Silicon has one GPU, so it is unaffected.
 - [NV12 softens fine coloured detail and caps output at SDR 8-bit] → This was the user's choice over waiting on upstream. `SurfaceFormat::Bgra` is ready for when GPUI accepts it (slice 6+), and the trade-off is in the proposal and the crate docs.
 - [The `vid` re-select could glitch on some media (a brief black frame, or a seek to a keyframe)] → It happens only when a renderer is created after load. The spec allows up to a 1 s position change, and the test checks the video appears and playback continues.
-- [`AnyView::cached` may not isolate per-frame re-renders the way the design expects in this GPUI version] → Task 2.2 checks it with a render counter on the parent view in the harness test. The fallback is to notify through the keyed entity: correct but costlier, and documented.
+- [`AnyView::cached` may not isolate per-frame re-renders the way the design expects in this GPUI version] → Task 2.2 checks it with a render counter on the parent view in the harness test. The fallback is to notify through the keyed entity: correct but costlier, and documented. **Outcome:** it does not isolate them (see "Per-frame cost" above). The ancestors re-render once per frame, and this is documented.
 - [`gpui-kit` minor-version coupling: an app on 0.7 or 0.9 gets two GPUI copies, and the types do not match] → The README states the required `gpui-kit` version, and `player-gpui` releases track it.
 - [GPUI's `assert_eq!` on the pixel format changes in a future version] → Only `SurfaceFormat::Nv12` is ever passed. A GPUI upgrade that adds BGRA would be an opportunity, not a break.
 - [Building GPUI on Windows arm64 or Linux arm64 CI fails] → The first CI run (task 3.3) shows it. If a leg cannot build GPUI, `crates/gpui` is excluded on that leg, and the gap is recorded.

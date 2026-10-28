@@ -25,7 +25,12 @@ pub enum VideoOutput {
     #[default]
     Null,
     /// The application draws the video through a [`RenderContext`](crate::RenderContext), which must be created
-    /// before the first [`Player::load`]. mpv opens no window of its own.
+    /// before the first [`Player::load`], or on macOS through a surface renderer (`player::macos`). mpv opens no
+    /// window of its own.
+    ///
+    /// On macOS this also turns on VideoToolbox hardware decoding (`hwdec=videotoolbox`), whose frames reach the GPU
+    /// without a copy. mpv falls back to software decoding by itself where VideoToolbox cannot decode a file;
+    /// `mpv_option("hwdec", "no")` turns it off.
     Render,
 }
 
@@ -124,6 +129,11 @@ impl PlayerBuilder {
         for (name, value) in defaults {
             mpv.set_option(name, value)?;
         }
+        // Zero-copy hardware decoding: mpv maps each decoded IOSurface straight into the render context's CGL context,
+        // and falls back to software decoding by itself where VideoToolbox cannot decode.
+        if cfg!(target_os = "macos") && self.video_output == VideoOutput::Render {
+            mpv.set_option("hwdec", "videotoolbox")?;
+        }
 
         let paused = self.autoplay == Autoplay::Off;
         let muted = self.muted || self.autoplay == Autoplay::Muted;
@@ -181,6 +191,24 @@ mod tests {
     fn render_output() {
         let player = Player::builder().video_output(VideoOutput::Render).mpv_option("ao", "null").build().unwrap();
         assert_eq!(player.get_property::<String>("vo").unwrap(), "libmpv");
+    }
+
+    fn hwdec(builder: PlayerBuilder) -> String {
+        builder.mpv_option("ao", "null").build().unwrap().get_property::<String>("hwdec").unwrap()
+    }
+
+    #[test]
+    fn hardware_decoding_default() {
+        let render = hwdec(Player::builder().video_output(VideoOutput::Render));
+        let expected = if cfg!(target_os = "macos") { "videotoolbox" } else { "no" };
+        assert_eq!(render, expected);
+        assert_eq!(hwdec(Player::builder().video_output(VideoOutput::Null)), "no");
+    }
+
+    #[test]
+    fn hardware_decoding_overridden() {
+        let render = hwdec(Player::builder().video_output(VideoOutput::Render).mpv_option("hwdec", "no"));
+        assert_eq!(render, "no");
     }
 
     #[test]

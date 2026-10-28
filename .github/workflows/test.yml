@@ -20,11 +20,12 @@ env:
   CARGO_TERM_COLOR: always
   # The Linux archive leaves the display and audio stacks and the Vulkan loader dynamic. These
   # packages provide their `.pc` files and `.so` links for the closure of `mpv.pc`; `build.rs`
-  # reads the `.pc` files itself, so no `pkg-config` binary is needed.
+  # reads the `.pc` files itself, so no `pkg-config` binary is needed. GPUI (`crates/gpui`)
+  # also needs xkbcommon-x11, fontconfig and freetype.
   LINUX_DEV_PACKAGES: >-
     libx11-dev libxext-dev libxfixes-dev libxrandr-dev libxss-dev libxpresent-dev
     libx11-xcb-dev libxcb-dri3-dev libxkbcommon-dev libwayland-dev wayland-protocols libegl-dev
-    libgbm-dev libdrm-dev
+    libgbm-dev libdrm-dev libxkbcommon-x11-dev libfontconfig-dev libfreetype-dev
     libdisplay-info-dev libvdpau-dev libpulse-dev libpipewire-0.3-dev libvulkan-dev
   # Software OpenGL for the render tests: Mesa's EGL and llvmpipe. The runners have no GPU.
   LINUX_GL_PACKAGES: libegl1 libegl-mesa0 libgl1-mesa-dri

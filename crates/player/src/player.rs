@@ -2,7 +2,7 @@
 
 use crate::builder::{Autoplay, PlayerBuilder, VideoOutput};
 use crate::error::{Error, Result};
-use crate::event::{self, Events, LOAD_REPLY, Shared, State};
+use crate::event::{self, Events, Shared, State};
 use crate::mpv::{Handle, PropertyValue};
 use crate::source::Source;
 use std::fmt;
@@ -81,13 +81,18 @@ impl Player {
             let (mpv, shared) = (Arc::clone(&mpv), Arc::clone(&shared));
             std::thread::Builder::new()
                 .name("player-events".into())
-                .spawn(move || event::run(&mpv, &shared))
+                .spawn(move || event::run(&mpv, &shared, autoplay))
                 .map_err(|e| Error::Init(format!("could not start the event thread: {e}")))?
         };
 
         let render_active = Arc::new(AtomicBool::new(false));
         let inner = Inner { mpv, shared, autoplay, video_output, render_active, thread: Some(thread) };
         Ok(Self { inner: Arc::new(inner) })
+    }
+
+    /// Whether `a` and `b` are copies of the same player, as [`Arc::ptr_eq`] tells for `Arc`s.
+    pub fn ptr_eq(a: &Player, b: &Player) -> bool {
+        Arc::ptr_eq(&a.inner, &b.inner)
     }
 
     fn mpv(&self) -> &Handle {
@@ -108,6 +113,21 @@ impl Player {
         &self.inner.render_active
     }
 
+    /// The state shared with the event thread, which a surface renderer tells of its existence.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn shared(&self) -> &Arc<Shared> {
+        &self.inner.shared
+    }
+
+    /// Records that a surface renderer now exists, and loads the media again if it ended for want of one: media
+    /// without audio ends as soon as its video output fails to start.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn surface_attached(&self) {
+        if let Some(source) = self.inner.shared.surface_attached(true) {
+            let _ = event::load(self.mpv(), self.inner.autoplay, &source);
+        }
+    }
+
     /// Loads `source` in place of any current media, then plays it or not according to the [`Autoplay`] mode.
     ///
     /// Returns once mpv has accepted the request, without waiting for network or disk. The outcome arrives as
@@ -119,12 +139,8 @@ impl Player {
     ///
     /// Returns [`Error::Property`] or [`Error::Command`] if mpv rejects the request.
     pub fn load(&self, source: Source) -> Result<()> {
-        let autoplay = self.inner.autoplay;
-        self.mpv().set("pause", autoplay == Autoplay::Off)?;
-        if autoplay == Autoplay::Muted {
-            self.mpv().set("mute", true)?;
-        }
-        self.mpv().command_async(LOAD_REPLY, &["loadfile", source.as_str(), "replace"])
+        self.inner.shared.loading(&source, self.inner.render_active.load(Ordering::Acquire));
+        event::load(self.mpv(), self.inner.autoplay, &source)
     }
 
     /// Starts or resumes playback. Media that has played to its end restarts from the beginning, as in Video.js.

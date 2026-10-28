@@ -28,6 +28,23 @@ thiserror = "2"
 # The event channel: receivable from blocking threads and from any async executor alike.
 flume = "0.12"
 
+# `player::macos`: an offscreen CGL context and IOSurface-backed `CVPixelBuffer`s. The objc2 crates and versions are
+# GPUI's own, so `CFRetained<CVPixelBuffer>` is the type its `paint_surface` takes.
+[target.'cfg(target_os = "macos")'.dependencies]
+glow = "0.16"
+objc2-core-foundation = { version = "0.3.2", default-features = false, features = ["std", "CFBase", "CFDictionary", "CFNumber", "CFString"] }
+objc2-core-video = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "CVBase",
+    "CVBuffer",
+    "CVImageBuffer",
+    "CVPixelBuffer",
+    "CVPixelBufferIOSurface",
+    "CVReturn",
+    "objc2-io-surface",
+] }
+objc2-io-surface = { version = "0.3.2", default-features = false, features = ["std", "IOSurfaceRef", "objc2-core-foundation"] }
+
 [dev-dependencies]
 # RAII temporary directories for the local-file tests. A git dependency without a version is stripped by
 # `cargo publish`, so the crate stays publishable.

@@ -81,6 +81,10 @@
 //! The video's display size, to size the framebuffer and lay out the player, is in [`State::video_size`] and
 //! announced by [`Event::VideoSizeChanged`].
 //!
+//! On macOS, toolkits that draw with Metal (GPUI among them) use `player::macos::SurfaceRenderer` instead. It owns its
+//! render thread and OpenGL context, and hands out each frame as an IOSurface-backed `CVPixelBuffer`, with no
+//! `unsafe` code. The module exists on macOS only.
+//!
 //! # The UI layer
 //!
 //! [`ui`] gives every frontend the Video.js player experience without drawing anything: [`ui::Controls`] takes the
@@ -98,6 +102,8 @@
 pub mod sys;
 
 pub mod error;
+#[cfg(target_os = "macos")]
+pub mod macos;
 pub mod prelude;
 pub mod ui;
 

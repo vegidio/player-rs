@@ -4,14 +4,14 @@ A fast, user-friendly video player for Rust, built on [libmpv](https://mpv.io). 
 
 libmpv and everything it depends on (FFmpeg, libplacebo, libass, …) are linked **statically** from the prebuilt archives of [vegidio/binaries-mpv](https://github.com/vegidio/binaries-mpv). Programs built with `player-rs` need neither mpv nor FFmpeg installed.
 
-> **Status:** early. `player-rs` plays media and draws its video into an OpenGL framebuffer the application provides, on every supported platform (rendering on Windows arm64 is not verified by CI, see [Building](#building)). Its toolkit-agnostic UI layer (`player::ui`) implements the Video.js control behaviour, ready for a frontend to draw. Showing video in a GPUI window, and the GPUI control bar itself, come in later changes.
+> **Status:** early. `player-rs` plays media and draws its video into an OpenGL framebuffer the application provides, on every supported platform (rendering on Windows arm64 is not verified by CI, see [Building](#building)). On macOS it also renders into IOSurfaces that Metal toolkits can show without a copy, and `player-gpui` shows the video in a GPUI window. Video in GPUI on Windows and Linux, and the GPUI control bar (from the toolkit-agnostic `player::ui` layer, which already implements the Video.js control behaviour), come in later changes.
 
 ## Workspace
 
 | Path            | Package       | Library       | Purpose                                                                                                       |
 |-----------------|---------------|---------------|---------------------------------------------------------------------------------------------------------------|
 | `crates/player` | `player-rs`   | `player`      | Core crate: downloads and links libmpv, raw FFI bindings (`player::sys`), the safe API. No GUI dependency.    |
-| `crates/gpui`   | `player-gpui` | `player_gpui` | The player UI for [GPUI](https://gpui.rs) apps (placeholder for now). Goes through `player-rs`, never libmpv. |
+| `crates/gpui`   | `player-gpui` | `player_gpui` | The player UI for [GPUI](https://gpui.rs) apps: the `VideoPlayer` element. Goes through `player-rs`, never libmpv. |
 | `xtask`         | `xtask`       | -             | Dev-only tooling (not published): regenerates the FFI bindings.                                               |
 
 ## Usage
@@ -67,6 +67,33 @@ if render.update() {
 - Create the render context before the first `load`; media loaded before it plays without video.
 - `state().video_size` and `Event::VideoSizeChanged` give the video's display size. The video is letterboxed into the target with black bars.
 - The render context keeps mpv alive, so it and the `Player` can be dropped in either order. Dropping the last `Player` stops playback.
+
+On macOS, `VideoOutput::Render` players also use VideoToolbox hardware decoding by default (`mpv_option("hwdec", "no")` turns it off), and `player::macos::SurfaceRenderer` serves toolkits that draw with Metal. It owns a render thread and an offscreen OpenGL context, and publishes each frame as an IOSurface-backed `CVPixelBuffer` (BGRA, or NV12 for GPUI), with no `unsafe` code and no copy through the CPU:
+
+```rust
+let renderer = SurfaceRenderer::builder(&player).format(SurfaceFormat::Nv12).on_frame(|| request_repaint()).build()?;
+renderer.set_size(width_px, height_px);
+// When painting: renderer.latest() -> Option<Frame>, with frame.pixel_buffer()
+```
+
+Media loaded before the surface renderer exists still shows its video. NV12 halves chroma resolution at screen size and, like BGRA, is 8-bit SDR (mpv tone-maps HDR). A Mac without a GPU (a virtual machine) falls back to Apple's software OpenGL renderer, where the player is switched to bilinear scaling.
+
+### GPUI
+
+`player-gpui` adds the `VideoPlayer` element to apps built with [GPUI-Kit](https://gpui-kit.com) **0.8** (the app must use the same `gpui-kit` minor version):
+
+```rust
+use player_gpui::VideoPlayer;
+
+// In a view's `render`, for a player built with `VideoOutput::Render`:
+div().size_full().child(VideoPlayer::new("movie", &self.player).size_full())
+```
+
+It shows the video upright and letterboxed on black, at the element's size in device pixels. It repaints for each new frame and not while paused. Its state is kept per element id, so re-rendering the parent does not restart the video. Each frame re-renders the views the element is in, as for any repainting GPUI view, so keep those views cheap. Video is shown on **macOS only** for now; on Windows and Linux the element is black while audio plays. Try it with:
+
+```sh
+cargo run -p player-gpui --example play -- path/to/movie.mp4
+```
 
 ### The UI layer
 
@@ -124,7 +151,7 @@ cargo run -p player-rs --example play -- path/to/movie.mp4
 
 The tests need no media files, display, GPU or sound device: they play media mpv generates itself (`av://lavfi:testsrc`) or WAV files they write to a temporary directory, with mpv's null audio output. The render tests (`tests/render.rs`) draw into an offscreen framebuffer of a headless, software-rendered OpenGL context:
 
-- **macOS:** Apple's software renderer, built in. Set `PLAYER_TEST_GL=hardware` to run them on the GPU instead.
+- **macOS:** Apple's software renderer, built in. Set `PLAYER_TEST_GL=hardware` to run them on the GPU instead. The surface tests (`tests/surface.rs`) and the `player-gpui` tests follow the same setting, and the VideoToolbox test runs only with it.
 - **Linux:** Mesa's EGL and llvmpipe (`sudo apt-get install libegl1 libegl-mesa0 libgl1-mesa-dri`; set `LIBGL_ALWAYS_SOFTWARE=1` to use llvmpipe on a machine with a GPU).
 - **Windows:** the system's OpenGL is version 1.1 without a GPU driver, too old for mpv. CI copies Mesa's `opengl32.dll` and `libgallium_wgl.dll` from [mesa-dist-win](https://github.com/pal1000/mesa-dist-win) next to the test binaries (`target/<triple>/debug/deps`) and sets `GALLIUM_DRIVER=llvmpipe`. Only the tests use them; applications keep using the system's OpenGL.
 - **Windows arm64:** no software OpenGL exists (mesa-dist-win builds x64 and x86 only), so CI skips the GL tests there by setting `PLAYER_TEST_SKIP_GL=1`. Rendering on Windows arm64 is therefore not verified by CI; it needs a machine with a GPU driver.

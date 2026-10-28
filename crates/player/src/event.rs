@@ -1,6 +1,8 @@
 //! Playback state, events, and the thread that turns mpv's events into both.
 
+use crate::builder::Autoplay;
 use crate::mpv::{Handle, MpvEvent, PropertyData};
+use crate::source::Source;
 use crate::sys;
 use std::ffi::c_int;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -140,11 +142,74 @@ pub(crate) struct Shared {
     subscribers: Mutex<Vec<flume::Sender<Event>>>,
     /// Set when the player is dropped, so the event thread exits.
     pub(crate) stop: AtomicBool,
+    recovery: Mutex<VideoRecovery>,
+}
+
+/// Media without audio, loaded while no render context exists, ends at once: its video output cannot start. A surface
+/// renderer loads it again, from whichever of it or the event thread learns last of the other's side.
+#[derive(Debug, Default)]
+struct VideoRecovery {
+    /// What [`Player::load`](crate::Player::load) last loaded.
+    last: Option<Source>,
+    /// It was loaded while the player had no render context, so its video output could not start.
+    without_render: bool,
+    /// It ended for that reason.
+    failed: bool,
+    /// A surface renderer exists.
+    surface: bool,
+}
+
+impl VideoRecovery {
+    /// Records an END_FILE error. mpv reports a video output that cannot start as `MPV_ERROR_NOTHING_TO_PLAY` when the
+    /// media has no audio, which media with nothing playable reports too; only a load made without a render context
+    /// counts.
+    fn ended(&mut self, error: c_int) {
+        let video = matches!(error, sys::MPV_ERROR_VO_INIT_FAILED | sys::MPV_ERROR_NOTHING_TO_PLAY);
+        self.failed = video && self.without_render;
+    }
+
+    /// The source to load again, if its media failed while a surface renderer exists. A source is loaded again once,
+    /// and with a render context, so loading it again can never ask for another.
+    fn take(&mut self) -> Option<Source> {
+        if self.failed && self.surface {
+            self.failed = false;
+            self.without_render = false;
+            self.last.clone()
+        } else {
+            None
+        }
+    }
 }
 
 impl Shared {
     pub(crate) fn new(state: State) -> Self {
-        Self { state: RwLock::new(state), subscribers: Mutex::new(Vec::new()), stop: AtomicBool::new(false) }
+        Self {
+            state: RwLock::new(state),
+            subscribers: Mutex::new(Vec::new()),
+            stop: AtomicBool::new(false),
+            recovery: Mutex::default(),
+        }
+    }
+
+    fn recovery(&self) -> std::sync::MutexGuard<'_, VideoRecovery> {
+        self.recovery.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Records the source [`Player::load`](crate::Player::load) loads, and whether the player has a render context.
+    pub(crate) fn loading(&self, source: &Source, rendering: bool) {
+        let mut recovery = self.recovery();
+        recovery.last = Some(source.clone());
+        recovery.without_render = !rendering;
+        recovery.failed = false;
+    }
+
+    /// Records whether a surface renderer exists, and returns the source to load again if its media already failed
+    /// for want of one.
+    #[cfg(target_os = "macos")]
+    pub(crate) fn surface_attached(&self, attached: bool) -> Option<Source> {
+        let mut recovery = self.recovery();
+        recovery.surface = attached;
+        recovery.take()
     }
 
     pub(crate) fn state(&self) -> State {
@@ -174,6 +239,26 @@ impl Shared {
 
 /// The `reply_userdata` of the asynchronous `loadfile` sent by [`Player::load`](crate::Player::load).
 pub(crate) const LOAD_REPLY: u64 = 1;
+
+/// Loads `source` as [`Player::load`](crate::Player::load) does, applying the [`Autoplay`] mode.
+pub(crate) fn load(mpv: &Handle, autoplay: Autoplay, source: &Source) -> crate::Result<()> {
+    mpv.set("pause", autoplay == Autoplay::Off)?;
+    if autoplay == Autoplay::Muted {
+        mpv.set("mute", true)?;
+    }
+    mpv.command_async(LOAD_REPLY, &["loadfile", source.as_str(), "replace"])
+}
+
+/// [`load`] without waiting on mpv, for the event thread: a synchronous call there could wait on mpv while mpv waits
+/// for its events to be read. mpv runs asynchronous commands in order.
+fn reload_async(mpv: &Handle, autoplay: Autoplay, source: &Source) {
+    let pause = if autoplay == Autoplay::Off { "yes" } else { "no" };
+    let _ = mpv.command_async(0, &["set", "pause", pause]);
+    if autoplay == Autoplay::Muted {
+        let _ = mpv.command_async(0, &["set", "mute", "yes"]);
+    }
+    let _ = mpv.command_async(LOAD_REPLY, &["loadfile", source.as_str(), "replace"]);
+}
 
 /// The observed properties, identified by their `reply_userdata`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -350,7 +435,7 @@ impl LoadTracker {
 }
 
 /// The event loop: the only caller of `mpv_wait_event` on `mpv`. Runs until `shared.stop` is set or mpv shuts down.
-pub(crate) fn run(mpv: &Handle, shared: &Shared) {
+pub(crate) fn run(mpv: &Handle, shared: &Shared, autoplay: Autoplay) {
     let mut loads = LoadTracker::default();
     let mut seeking = false;
     let refresh = |properties: &[Property]| {
@@ -378,6 +463,7 @@ pub(crate) fn run(mpv: &Handle, shared: &Shared) {
             MpvEvent::CommandReply { id: LOAD_REPLY, error } if error >= 0 => loads.on_load_accepted(),
             MpvEvent::StartFile => {
                 loads.on_start_file();
+                shared.recovery().failed = false;
                 // With `keep-open=no` the END_FILE that set `ended` unloads the media, so no `eof-reached` change
                 // clears it; new media has not ended.
                 shared.update(|state| {
@@ -391,6 +477,16 @@ pub(crate) fn run(mpv: &Handle, shared: &Shared) {
                 shared.publish(Event::Loaded);
             }
             MpvEvent::EndFile { reason, error } => {
+                if reason == sys::MPV_END_FILE_REASON_ERROR {
+                    let reload = {
+                        let mut recovery = shared.recovery();
+                        recovery.ended(error);
+                        recovery.take()
+                    };
+                    if let Some(source) = reload {
+                        reload_async(mpv, autoplay, &source);
+                    }
+                }
                 if let Some(reason) = loads.on_end_file(reason, error) {
                     shared.update(|state| match reason {
                         // With `keep-open=no`, an `eof-reached` change may have announced this end already.
