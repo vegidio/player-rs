@@ -8,4 +8,5 @@ pub use crate::builder::{Autoplay, PlayerBuilder, VideoOutput};
 pub use crate::event::{EndReason, Event, Events, State};
 pub use crate::mpv::PropertyValue;
 pub use crate::player::{Player, Seek};
+pub use crate::render::{RenderContext, RenderTarget};
 pub use crate::source::Source;

@@ -8,6 +8,8 @@ use crate::sys;
 use std::ffi::{CStr, CString, c_char, c_int, c_void};
 use std::ptr::{self, NonNull};
 
+pub(crate) mod render;
+
 /// Owns one `mpv_handle` and destroys it (`mpv_terminate_destroy`) when dropped.
 ///
 /// Nominally `pub` only because the sealed [`PropertyValue`] methods take it; the module is private.

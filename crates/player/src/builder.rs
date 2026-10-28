@@ -24,12 +24,16 @@ pub enum VideoOutput {
     /// No video is shown; audio still plays.
     #[default]
     Null,
+    /// The application draws the video through a [`RenderContext`](crate::RenderContext), which must be created
+    /// before the first [`Player::load`]. mpv opens no window of its own.
+    Render,
 }
 
 impl VideoOutput {
     fn mpv_name(self) -> &'static str {
         match self {
             Self::Null => "null",
+            Self::Render => "libmpv",
         }
     }
 }
@@ -143,8 +147,9 @@ impl PlayerBuilder {
             muted,
             rate: 1.0,
             ended: false,
+            video_size: None,
         };
-        Player::start(mpv, state, self.autoplay)
+        Player::start(mpv, state, self.autoplay, self.video_output)
     }
 }
 
@@ -169,6 +174,12 @@ mod tests {
         assert!(!player.get_property::<bool>("input-default-bindings").unwrap());
         assert!(!player.get_property::<bool>("input-vo-keyboard").unwrap());
         assert!(!player.get_property::<bool>("osc").unwrap());
+    }
+
+    #[test]
+    fn render_output() {
+        let player = Player::builder().video_output(VideoOutput::Render).mpv_option("ao", "null").build().unwrap();
+        assert_eq!(player.get_property::<String>("vo").unwrap(), "libmpv");
     }
 
     #[test]

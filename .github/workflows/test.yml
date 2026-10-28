@@ -26,6 +26,11 @@ env:
     libx11-xcb-dev libxcb-dri3-dev libxkbcommon-dev libwayland-dev wayland-protocols libegl-dev
     libgbm-dev libdrm-dev
     libdisplay-info-dev libvdpau-dev libpulse-dev libpipewire-0.3-dev libvulkan-dev
+  # Software OpenGL for the render tests: Mesa's EGL and llvmpipe. The runners have no GPU.
+  LINUX_GL_PACKAGES: libegl1 libegl-mesa0 libgl1-mesa-dri
+  # Mesa's software OpenGL for Windows, from https://github.com/pal1000/mesa-dist-win (pinned, hash-checked).
+  MESA_WIN_VERSION: "26.2.4"
+  MESA_WIN_SHA256: 351fc8c8b695878ffb3eaa044b3ead08672a48b1a045e3c3e3975811df0f6695
 
 jobs:
   # fmt and clippy run once on Linux x64 (the lints are platform-independent), keeping the
@@ -93,7 +98,9 @@ jobs:
 
       - name: Install Linux dev packages
         if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ${{ env.LINUX_DEV_PACKAGES }}
+        run: >-
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends
+          ${{ env.LINUX_DEV_PACKAGES }} ${{ env.LINUX_GL_PACKAGES }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -108,5 +115,24 @@ jobs:
       - name: Build
         run: cargo build -p player-rs -p player-gpui --target ${{ matrix.target }} --all-targets
 
+      # The system's GDI OpenGL is version 1.1, which mpv cannot use. Mesa's `opengl32.dll` placed next to the test
+      # binaries is loaded instead, since Windows searches the executable's folder first. Only the tests use it;
+      # shipped apps keep importing the system's DLLs. mesa-dist-win has no arm64 build, so that leg uses the
+      # runner's own OpenGL.
+      - name: Install Mesa OpenGL (Windows x64)
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        shell: bash
+        run: |
+          archive="mesa3d-${MESA_WIN_VERSION}-release-msvc.7z"
+          curl -fsSL --retry 5 -o "$RUNNER_TEMP/$archive" \
+            "https://github.com/pal1000/mesa-dist-win/releases/download/${MESA_WIN_VERSION}/$archive"
+          echo "${MESA_WIN_SHA256}  $RUNNER_TEMP/$archive" | sha256sum -c -
+          7z e "$RUNNER_TEMP/$archive" x64/opengl32.dll x64/libgallium_wgl.dll -o"target/${{ matrix.target }}/debug/deps" -y
+
       - name: Test
         run: cargo test -p player-rs -p player-gpui --target ${{ matrix.target }}
+        env:
+          # Linux: Mesa's llvmpipe. Windows: Mesa's llvmpipe rather than its D3D12 driver. Ignored on macOS, where the
+          # tests ask CGL for Apple's software renderer.
+          LIBGL_ALWAYS_SOFTWARE: "1"
+          GALLIUM_DRIVER: llvmpipe

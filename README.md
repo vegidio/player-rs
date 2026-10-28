@@ -4,7 +4,7 @@ A fast, user-friendly video player for Rust, built on [libmpv](https://mpv.io). 
 
 libmpv and everything it depends on (FFmpeg, libplacebo, libass, …) are linked **statically** from the prebuilt archives of [vegidio/binaries-mpv](https://github.com/vegidio/binaries-mpv). Programs built with `player-rs` need neither mpv nor FFmpeg installed.
 
-> **Status:** early. `player-rs` plays media headless (audio, no video output yet) on every supported platform; rendering video and the GPUI player come in later changes.
+> **Status:** early. `player-rs` plays media and draws its video into an OpenGL framebuffer the application provides, on every supported platform. Showing it in a GPUI window, and the GPUI player itself, come in later changes.
 
 ## Workspace
 
@@ -46,6 +46,28 @@ Behaviour follows [Video.js](https://videojs.org) where the two differ:
 - **Autoplay** (`Off`, `On`, `Muted`) applies to every `load`.
 - **Volume** is `0.0..=1.0`. The builder rejects other values; the runtime setters clamp them, as does the playback rate (`0.01..=100.0`).
 
+### Rendering video
+
+Build the player with `VideoOutput::Render` and create a `RenderContext` from your toolkit's OpenGL context. mpv then draws each frame into a framebuffer you own, doing decoding, scaling, colour conversion and subtitles on the GPU, without copying frames through the CPU:
+
+```rust
+let player = Player::builder().video_output(VideoOutput::Render).build()?;
+// SAFETY: the GL context is current on this thread, where `render` is used and dropped, and outlives it.
+let mut render = unsafe { RenderContext::new(&player, get_proc_address, move || wake_render_thread())? };
+player.load(Source::file("movie.mp4")?)?;
+
+// On the render thread, after each wake-up:
+if render.update() {
+    render.render(RenderTarget { fbo, width, height }, flip_y)?;
+}
+```
+
+- `RenderContext::new` is `unsafe` because the crate cannot check the GL context: it must be current whenever the render context is created, used or dropped, and must outlive it. OpenGL 2.1+ or OpenGL ES 2.0+.
+- The frame callback runs on mpv's threads and must only wake the render thread.
+- Create the render context before the first `load`; media loaded before it plays without video.
+- `state().video_size` and `Event::VideoSizeChanged` give the video's display size. The video is letterboxed into the target with black bars.
+- The render context keeps mpv alive, so it and the `Player` can be dropped in either order. Dropping the last `Player` stops playback.
+
 Play a file or URL from the command line:
 
 ```sh
@@ -73,7 +95,11 @@ cargo run -p player-rs --example version
 cargo run -p player-rs --example play -- path/to/movie.mp4
 ```
 
-The tests need no media files, display or sound device: they play media mpv generates itself (`av://lavfi:testsrc`) or WAV files they write to a temporary directory, with mpv's null audio output.
+The tests need no media files, display, GPU or sound device: they play media mpv generates itself (`av://lavfi:testsrc`) or WAV files they write to a temporary directory, with mpv's null audio output. The render tests (`tests/render.rs`) draw into an offscreen framebuffer of a headless, software-rendered OpenGL context:
+
+- **macOS:** Apple's software renderer, built in. Set `PLAYER_TEST_GL=hardware` to run them on the GPU instead.
+- **Linux:** Mesa's EGL and llvmpipe (`sudo apt-get install libegl1 libegl-mesa0 libgl1-mesa-dri`; set `LIBGL_ALWAYS_SOFTWARE=1` to use llvmpipe on a machine with a GPU).
+- **Windows:** the system's OpenGL is version 1.1 without a GPU driver, too old for mpv. CI copies Mesa's `opengl32.dll` and `libgallium_wgl.dll` from [mesa-dist-win](https://github.com/pal1000/mesa-dist-win) next to the test binaries (`target/<triple>/debug/deps`) and sets `GALLIUM_DRIVER=llvmpipe`. Only the tests use them; applications keep using the system's OpenGL.
 
 On the first build `crates/player/build.rs` downloads the `binaries-mpv` release pinned in [`crates/player/mpv-version.txt`](crates/player/mpv-version.txt) for the target (35-70 MB) and caches it in Cargo's `OUT_DIR`; later builds reuse it. The link line is derived from the archive's own `lib/pkgconfig/*.pc` files, so no `pkg-config` binary is needed.
 

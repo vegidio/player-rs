@@ -32,3 +32,18 @@ flume = "0.12"
 # RAII temporary directories for the local-file tests. A git dependency without a version is stripped by
 # `cargo publish`, so the crate stays publishable.
 rust-sak = { git = "https://github.com/vegidio/rust-sak", tag = "26.10.1", default-features = false, features = ["fs"] }
+# The render tests' offscreen framebuffer and pixel readback.
+glow = "0.16"
+
+# Headless GL contexts for the render tests: EGL on a device (Linux), WGL on a hidden window (Windows). macOS uses raw
+# CGL instead, because glutin cannot select Apple's software renderer.
+[target.'cfg(not(target_os = "macos"))'.dev-dependencies]
+glutin = { version = "0.32", default-features = false, features = ["egl", "wgl"] }
+
+[target.'cfg(windows)'.dev-dependencies]
+raw-window-handle = "0.6"
+windows-sys = { version = "0.52", features = [
+    "Win32_Foundation",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_WindowsAndMessaging",
+] }

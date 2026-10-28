@@ -1,13 +1,13 @@
 //! The player handle.
 
-use crate::builder::{Autoplay, PlayerBuilder};
+use crate::builder::{Autoplay, PlayerBuilder, VideoOutput};
 use crate::error::{Error, Result};
 use crate::event::{self, Events, LOAD_REPLY, Shared, State};
 use crate::mpv::{Handle, PropertyValue};
 use crate::source::Source;
 use std::fmt;
 use std::sync::Arc;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::Duration;
 
@@ -36,13 +36,21 @@ struct Inner {
     mpv: Arc<Handle>,
     shared: Arc<Shared>,
     autoplay: Autoplay,
+    video_output: VideoOutput,
+    /// Set while a render context exists. Shared with it rather than kept here alone, so a render context that
+    /// outlives the player does not keep the event thread and subscribers alive.
+    render_active: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
 }
 
 impl Drop for Inner {
     fn drop(&mut self) {
+        // Stop playback even if a render context keeps the instance alive past this drop. Asynchronous, so the drop
+        // never waits on mpv's core, which may be waiting on the render thread this drop runs on.
+        let _ = self.mpv.command_async(0, &["stop"]);
+
         // Stop and join the event thread first, so no other thread is inside an mpv call when the last `Arc<Handle>`
-        // (this one) is dropped right after and destroys the instance.
+        // (this one, unless a render context holds another) is dropped right after and destroys the instance.
         self.shared.stop.store(true, Ordering::Release);
         self.mpv.wakeup();
         if let Some(thread) = self.thread.take() {
@@ -64,8 +72,8 @@ impl Player {
     }
 
     /// Wraps an initialised instance: observes its properties and starts the event thread.
-    pub(crate) fn start(mpv: Handle, state: State, autoplay: Autoplay) -> Result<Self> {
-        event::observe(&mpv).map_err(Error::Init)?;
+    pub(crate) fn start(mpv: Handle, state: State, autoplay: Autoplay, video_output: VideoOutput) -> Result<Self> {
+        event::observe(&mpv, video_output == VideoOutput::Render).map_err(Error::Init)?;
 
         let mpv = Arc::new(mpv);
         let shared = Arc::new(Shared::new(state));
@@ -77,11 +85,27 @@ impl Player {
                 .map_err(|e| Error::Init(format!("could not start the event thread: {e}")))?
         };
 
-        Ok(Self { inner: Arc::new(Inner { mpv, shared, autoplay, thread: Some(thread) }) })
+        let render_active = Arc::new(AtomicBool::new(false));
+        let inner = Inner { mpv, shared, autoplay, video_output, render_active, thread: Some(thread) };
+        Ok(Self { inner: Arc::new(inner) })
     }
 
     fn mpv(&self) -> &Handle {
         &self.inner.mpv
+    }
+
+    /// The shared mpv handle, for a render context to keep the instance alive.
+    pub(crate) fn handle(&self) -> &Arc<Handle> {
+        &self.inner.mpv
+    }
+
+    pub(crate) fn video_output(&self) -> VideoOutput {
+        self.inner.video_output
+    }
+
+    /// Set while the player has a render context.
+    pub(crate) fn render_active(&self) -> &Arc<AtomicBool> {
+        &self.inner.render_active
     }
 
     /// Loads `source` in place of any current media, then plays it or not according to the [`Autoplay`] mode.

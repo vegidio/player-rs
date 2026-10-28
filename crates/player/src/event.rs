@@ -32,6 +32,12 @@ pub struct State {
     pub rate: f64,
     /// Playback reached the end of the media, which stays loaded and paused at its end.
     pub ended: bool,
+    /// The size at which the video is meant to be shown, as `(width, height)` in pixels, with its pixel aspect ratio
+    /// and rotation applied. `None` while unknown or when no video is shown: with [`VideoOutput::Null`], for media
+    /// without video, or with no [`RenderContext`](crate::RenderContext).
+    ///
+    /// [`VideoOutput::Null`]: crate::VideoOutput::Null
+    pub video_size: Option<(u32, u32)>,
 }
 
 /// Something that happened in a player, received through [`Events`].
@@ -56,6 +62,8 @@ pub enum Event {
     MutedChanged(bool),
     /// The playback rate changed.
     RateChanged(f64),
+    /// The video's display size changed; see [`State::video_size`].
+    VideoSizeChanged(Option<(u32, u32)>),
     /// A seek started.
     Seeking,
     /// A seek completed and playback continues from the new position.
@@ -171,10 +179,12 @@ enum Property {
     Speed,
     IdleActive,
     EofReached,
+    DWidth,
+    DHeight,
 }
 
 impl Property {
-    const ALL: [Self; 9] = [
+    const ALL: [Self; 11] = [
         Self::TimePos,
         Self::Duration,
         Self::Pause,
@@ -184,6 +194,8 @@ impl Property {
         Self::Speed,
         Self::IdleActive,
         Self::EofReached,
+        Self::DWidth,
+        Self::DHeight,
     ];
 
     fn name(self) -> &'static str {
@@ -197,11 +209,13 @@ impl Property {
             Self::Speed => "speed",
             Self::IdleActive => "idle-active",
             Self::EofReached => "eof-reached",
+            Self::DWidth => "dwidth",
+            Self::DHeight => "dheight",
         }
     }
 
     fn is_flag(self) -> bool {
-        !matches!(self, Self::TimePos | Self::Duration | Self::Volume | Self::Speed)
+        !matches!(self, Self::TimePos | Self::Duration | Self::Volume | Self::Speed | Self::DWidth | Self::DHeight)
     }
 
     fn from_id(id: u64) -> Option<Self> {
@@ -247,13 +261,34 @@ impl Property {
             Self::Speed => set(&mut state.rate, number?, |v| Some(Event::RateChanged(v))),
             Self::IdleActive => set(&mut state.idle, flag, |v| v.then_some(Event::Idle)),
             Self::EofReached => set(&mut state.ended, flag, |v| v.then_some(Event::Ended(EndReason::Eof))),
+            // Both dimensions make one value; see `apply_video_size`.
+            Self::DWidth | Self::DHeight => None,
         }
     }
 }
 
-/// Subscribes to every property in the state table.
-pub(crate) fn observe(mpv: &Handle) -> Result<(), String> {
+/// Writes the video's display size into `state` and returns the event announcing it, if it changed. The size is
+/// known only when both dimensions are known and positive.
+fn apply_video_size(state: &mut State, width: PropertyData, height: PropertyData) -> Option<Event> {
+    let pixels = |value| match value {
+        PropertyData::Double(pixels) if pixels.is_finite() && pixels >= 1.0 => Some(pixels.round() as u32),
+        _ => None,
+    };
+    let size = pixels(width).zip(pixels(height));
+    if state.video_size == size {
+        return None;
+    }
+    state.video_size = size;
+    Some(Event::VideoSizeChanged(size))
+}
+
+/// Subscribes to every property in the state table. The video's dimensions are observed only when `video` is set:
+/// mpv reports them even with `vo=null`, which shows no video.
+pub(crate) fn observe(mpv: &Handle, video: bool) -> Result<(), String> {
     for property in Property::ALL {
+        if !video && matches!(property, Property::DWidth | Property::DHeight) {
+            continue;
+        }
         let format = if property.is_flag() { sys::MPV_FORMAT_FLAG } else { sys::MPV_FORMAT_DOUBLE };
         mpv.observe(property as u64, property.name(), format)?;
     }
@@ -308,11 +343,17 @@ pub(crate) fn run(mpv: &Handle, shared: &Shared) {
         // SAFETY: this loop runs on one thread and is the only caller of `wait_event` on this handle.
         match unsafe { mpv.wait_event(-1.0) } {
             MpvEvent::Shutdown => break,
-            MpvEvent::PropertyChange { id, value } => {
-                if let Some(property) = Property::from_id(id) {
-                    shared.update(|state| property.apply(state, value));
+            MpvEvent::PropertyChange { id, value } => match Property::from_id(id) {
+                // A new video size usually changes both dimensions, notified one at a time. Reading both current
+                // values on either notification announces the new size once, instead of passing through a mix of
+                // old and new dimensions.
+                Some(Property::DWidth | Property::DHeight) => {
+                    let (width, height) = (Property::DWidth.read(mpv), Property::DHeight.read(mpv));
+                    shared.update(|state| apply_video_size(state, width, height));
                 }
-            }
+                Some(property) => shared.update(|state| property.apply(state, value)),
+                None => {}
+            },
             MpvEvent::CommandReply { id: LOAD_REPLY, error } if error >= 0 => loads.on_load_accepted(),
             MpvEvent::StartFile => {
                 loads.on_start_file();
@@ -371,6 +412,7 @@ mod tests {
             muted: false,
             rate: 1.0,
             ended: false,
+            video_size: None,
         }
     }
 
@@ -412,6 +454,33 @@ mod tests {
         assert_eq!(Property::TimePos.apply(&mut state, position), Some(Event::PositionChanged(expected)));
         assert_eq!(Property::TimePos.apply(&mut state, PropertyData::None), Some(Event::PositionChanged(None)));
         assert_eq!(state.position, None);
+    }
+
+    #[test]
+    fn video_size_changes_once_per_size() {
+        let mut state = state();
+        let px = PropertyData::Double;
+        // Width first known, height not yet: still unknown.
+        assert_eq!(apply_video_size(&mut state, px(160.0), PropertyData::None), None);
+        // The width's and then the height's notification each read both dimensions: one event.
+        assert_eq!(
+            apply_video_size(&mut state, px(160.0), px(120.0)),
+            Some(Event::VideoSizeChanged(Some((160, 120))))
+        );
+        assert_eq!(apply_video_size(&mut state, px(160.0), px(120.0)), None);
+        assert_eq!(state.video_size, Some((160, 120)));
+
+        // Both dimensions change: one event.
+        assert_eq!(
+            apply_video_size(&mut state, px(320.0), px(240.0)),
+            Some(Event::VideoSizeChanged(Some((320, 240))))
+        );
+        assert_eq!(apply_video_size(&mut state, px(320.0), px(240.0)), None);
+
+        // A zero dimension or an unavailable one makes the size unknown.
+        assert_eq!(apply_video_size(&mut state, px(0.0), px(240.0)), Some(Event::VideoSizeChanged(None)));
+        assert_eq!(apply_video_size(&mut state, PropertyData::None, PropertyData::None), None);
+        assert_eq!(state.video_size, None);
     }
 
     #[test]

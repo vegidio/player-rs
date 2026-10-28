@@ -103,7 +103,7 @@ Without `ADVANCED_CONTROL`, a render thread that also calls blocking `Player` me
 
 ### Video display size
 
-`dwidth` and `dheight` are observed like the existing numeric properties (requested as `MPV_FORMAT_DOUBLE`, which mpv converts from int64). They are the display size with pixel aspect ratio and rotation applied, which is what a frontend needs to size its target and lay out the player. `State.video_size` is `Some((w, h))` only when both are known and positive. `VideoSizeChanged` is emitted when the combined value changes, so a change of both dimensions emits one event, not two. When no video is shown (`Null` output, audio-only media, or no context), mpv leaves them unavailable, so the field is `None`. This sits in `crates/player` because every frontend needs it and none of it depends on a toolkit.
+`dwidth` and `dheight` are observed like the existing numeric properties (requested as `MPV_FORMAT_DOUBLE`, which mpv converts from int64). They are the display size with pixel aspect ratio and rotation applied, which is what a frontend needs to size its target and lay out the player. `State.video_size` is `Some((w, h))` only when both are known and positive. `VideoSizeChanged` is emitted when the combined value changes, so a change of both dimensions emits one event, not two. When no video is shown (audio-only media, or no context), mpv leaves them unavailable, so the field is `None`. mpv does report them with `vo=null`, so a `Null` player does not observe them at all and its field stays `None`. This sits in `crates/player` because every frontend needs it and none of it depends on a toolkit.
 
 ### FFI layout
 
@@ -125,6 +125,8 @@ mpv draws straight into the host's FBO on the GPU. The crate never maps or reads
 | **`glutin` 0.32** | **Chosen.** Headless contexts through CGL (macOS, no window), EGL (Linux, device or surfaceless platform, which Mesa's llvmpipe supports) and WGL (Windows, via a hidden window created with `windows-sys`, which glutin already pulls in). It is maintained by the Rust windowing community and needs no winit, which matters because winit's macOS event loop must own the main thread and the tests do not. |
 | `surfman` | Covers the same platforms, but is heavier and focused on Servo. |
 | Raw CGL/EGL/WGL FFI in a test helper | No dependency, but three hand-written platform helpers to maintain. This is the fallback if the spike shows glutin cannot make a context headless on some leg. |
+
+**Outcome of the spike (task 1.1):** glutin's CGL backend cannot select Apple's software renderer: its pixel format attributes offer only an optional "accelerated" flag, never `kCGLPFARendererID`. So macOS uses the raw FFI fallback: about 50 lines of CGL (`CGLChoosePixelFormat` with `kCGLRendererGenericFloatID`, or the GPU when `PLAYER_TEST_GL=hardware`) in `tests/common/gl.rs`. glutin stays a dev-dependency only for Linux and Windows.
 
 `glow` 0.16 (also used by egui) sets up the offscreen FBO and texture and reads the pixels back. `rust-sak` has nothing for graphics, so there is nothing to extend there. Both crates are dev-dependencies only, so consumers never see them.
 

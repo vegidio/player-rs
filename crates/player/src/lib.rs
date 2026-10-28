@@ -33,6 +33,54 @@
 //!   [`Player::set_property`] and [`Player::command`].
 //! - [`Events`] can be read from a blocking thread or awaited in any async executor.
 //!
+//! # Rendering video
+//!
+//! A player built with [`VideoOutput::Render`] draws its video through a [`RenderContext`], into an OpenGL
+//! framebuffer the application owns. mpv does the decoding, scaling, colour conversion and subtitle rendering on the
+//! GPU, and no frame is copied through the CPU. Any toolkit with an OpenGL context can show the result.
+//!
+//! - [`RenderContext::new`] is `unsafe`: the GL context must be current on the thread that creates, uses and drops
+//!   the render context, and must outlive it.
+//! - Its `on_frame` callback runs on mpv's threads and must only signal the render thread, which then calls
+//!   [`RenderContext::update`] and [`RenderContext::render`].
+//! - Create the render context before the first [`Player::load`]: media loaded before it exists plays without video.
+//!
+//! ```no_run
+//! use player::prelude::*;
+//! use std::ffi::{CStr, c_void};
+//! use std::sync::mpsc;
+//!
+//! // From the toolkit's GL context, such as glutin's `Display::get_proc_address`.
+//! fn get_proc_address(name: &CStr) -> *const c_void {
+//!     # let _ = name;
+//!     # std::ptr::null()
+//!     // ...
+//! }
+//!
+//! let player = Player::builder().video_output(VideoOutput::Render).build()?;
+//! let (wake, frames) = mpsc::channel();
+//! // SAFETY: the toolkit's GL context is current on this thread, where `render` is used and dropped, and outlives it.
+//! let mut render = unsafe {
+//!     RenderContext::new(&player, get_proc_address, move || {
+//!         let _ = wake.send(());
+//!     })?
+//! };
+//! player.load(Source::url("https://example.com/movie.mp4")?)?;
+//!
+//! while frames.recv().is_ok() {
+//!     if render.update() {
+//!         // Into the window's default framebuffer, which OpenGL shows bottom row first.
+//!         render.render(RenderTarget { fbo: 0, width: 1280, height: 720 }, true)?;
+//!         // Swap the window's buffers, then:
+//!         render.report_swap();
+//!     }
+//! }
+//! # Ok::<(), player::Error>(())
+//! ```
+//!
+//! The video's display size, to size the framebuffer and lay out the player, is in [`State::video_size`] and
+//! announced by [`Event::VideoSizeChanged`].
+//!
 //! [`client_api_version`] reports the client API version of the linked library, and [`BINDINGS_CLIENT_API_VERSION`]
 //! the one the [`sys`] bindings were generated from.
 #![warn(missing_docs)]
@@ -49,6 +97,7 @@ mod builder;
 mod event;
 mod mpv;
 mod player;
+mod render;
 mod source;
 
 pub use builder::{Autoplay, PlayerBuilder, VideoOutput};
@@ -56,6 +105,7 @@ pub use error::{Error, Result};
 pub use event::{EndReason, Event, Events, State};
 pub use mpv::PropertyValue;
 pub use player::{Player, Seek};
+pub use render::{RenderContext, RenderTarget};
 pub use source::Source;
 
 /// The client API version of the headers the [`sys`] bindings were generated from, as `(major, minor)`.

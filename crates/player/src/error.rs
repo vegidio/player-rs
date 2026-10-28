@@ -50,6 +50,12 @@ pub enum Error {
         /// mpv's message.
         message: String,
     },
+
+    /// A [`RenderContext`](crate::RenderContext) could not be created or could not draw: the player was not built
+    /// with [`VideoOutput::Render`](crate::VideoOutput::Render), it already has a render context, the target is
+    /// empty, or mpv rejected the GL context.
+    #[error("render: {0}")]
+    Render(String),
 }
 
 /// Decodes an mpv error code into a human-readable string via `mpv_error_string`.

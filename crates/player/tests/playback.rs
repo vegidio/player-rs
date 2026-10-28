@@ -113,6 +113,7 @@ fn load_with_autoplay_off() {
     assert!(state.paused);
     assert!(!state.idle);
     assert!(state.position.unwrap_or_default() < Duration::from_millis(100), "{state:?}");
+    assert_eq!(state.video_size, None, "audio-only media has no video size");
 }
 
 #[test]
@@ -122,7 +123,9 @@ fn autoplay_on() {
     load(&player, &events);
 
     wait_position_past(&events, Duration::from_millis(200));
-    assert!(!player.state().paused);
+    let state = player.state();
+    assert!(!state.paused);
+    assert_eq!(state.video_size, None, "no video is shown with VideoOutput::Null");
 }
 
 #[test]
