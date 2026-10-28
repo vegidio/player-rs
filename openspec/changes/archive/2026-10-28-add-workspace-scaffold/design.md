@@ -91,8 +91,8 @@ C enums are emitted as constified enums with a fixed `c_int` repr (bindgen other
 
 ### CI
 
-`test.yml`, adapted from `media-rs`:
-- `lint`: `cargo fmt --check` and `cargo clippy --workspace --all-targets -- -D warnings` on Linux x64. Unlike `media-rs`, fmt is enforced from the start, since the repo begins clean.
+`test.yml`, adapted from `media-rs`. It runs only when triggered manually (`workflow_dispatch`: Actions tab, or `gh workflow run test.yml --ref <branch>`), not on push or pull request, so it has to be run before merging and after every bump of `mpv-version.txt`.
+- `lint`: `cargo fmt --check` and `cargo clippy --workspace --exclude xtask --all-targets -- -D warnings` on Linux x64. Unlike `media-rs`, fmt is enforced from the start, since the repo begins clean.
 - `test`: 6 legs (macOS arm64, macOS x64 via Rosetta, Linux x64, Linux arm64, Windows x64, Windows arm64), `cargo build` + `cargo test` for `player-rs` and `player-gpui`. `xtask` is excluded so CI never builds bindgen.
 - Linux legs install the `-dev` packages providing the dynamic display/audio libraries named in the `.pc` files. The exact list is determined from the Linux `mpv.pc` closure during implementation.
 - Windows legs need no extra steps: the `26.10.1` archives ship no DLLs.
@@ -112,10 +112,11 @@ The only unsafe call is `mpv_client_api_version()`, which takes no arguments, ha
 - [macOS: libmpv contains Swift code] -> No search path is needed: the Swift libraries are autolinked from the SDK. But Rust's `x86_64-apple-darwin` default deployment target (10.12) predates the OS-shipped Swift runtime (10.14.4), so the linker records `@rpath/libswift*.dylib` and the binary fails to start (seen on the macOS x64 CI leg). The x86_64 archive is built for 10.15 anyway, so `MACOSX_DEPLOYMENT_TARGET >= 10.15` is required on x86_64 macOS: set in this repo's `.cargo/config.toml`, enforced by `build.rs` with an actionable error, and documented for downstream apps, since a build script cannot raise the deployment target of the final link. Dropping Swift from the mpv build in binaries-mpv would remove the requirement at the cost of mpv's macOS media-key/Now Playing integration; not done.
 - [`.pc` files may contain constructs the small parser does not handle (quoted paths, `-Wl,` flags, `Libs.private` on Windows using `-l` names that map to system import libs)] -> Unknown flags fail loudly in `build.rs` rather than being silently dropped, so CI shows them; the parser is unit-tested against the `.pc` files of all three OSes.
 - [Linux bfd single-pass linker ordering] -> `--start-group` for this package's own targets, as in `media-rs`; downstream crates get the bundled rlib.
-- [Downloading ~35-80 MB per clean build and per CI leg] -> `OUT_DIR` cache plus `Swatinem/rust-cache`; `PLAYER_BINARIES_DIR` for offline work.
+- [Downloading ~35-70 MB per clean build and per CI leg] -> `OUT_DIR` cache plus `Swatinem/rust-cache`; `PLAYER_BINARIES_DIR` for offline work.
 - [A future binaries-mpv release reintroduces a DLL dependency on Windows] -> The Windows test legs fail to start the test binary, and the spec's Windows scenario makes that a regression rather than something to work around.
 - [Duplicated download code in `build.rs` and `xtask`] -> Accepted, as in `media-rs`; it is small and a build script cannot be shared as a library.
 - [Committed bindings going stale after a bump] -> The client API version test fails on every leg.
+- [CI is manual-only, so a regression above is caught only when someone runs it] -> Accepted to save runner minutes; running `test.yml` is part of bumping `mpv-version.txt` and of merging.
 
 ## Migration Plan
 

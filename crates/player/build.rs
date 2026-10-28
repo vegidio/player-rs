@@ -24,6 +24,8 @@
 //! this package's own binaries, tests and examples, so a crate that depends on `player-rs` would link without libmpv.
 //! The static libraries are bundled into this crate's rlib.
 
+#[path = "build/archive.rs"]
+mod archive;
 #[path = "build/pkgconfig.rs"]
 mod pkgconfig;
 
@@ -41,6 +43,7 @@ fn mpv_version() -> &'static str {
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=mpv-version.txt");
+    println!("cargo:rerun-if-changed=build/archive.rs");
     println!("cargo:rerun-if-changed=build/pkgconfig.rs");
     println!("cargo:rerun-if-env-changed=PLAYER_BINARIES_DIR");
     println!("cargo:rerun-if-env-changed=PKG_CONFIG_PATH");
@@ -144,23 +147,7 @@ fn archive_name() -> String {
     let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
     let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
 
-    let os = match target_os.as_str() {
-        "linux" => "linux",
-        "macos" => "osx",
-        "windows" if target_env == "msvc" => "windows",
-        "windows" => {
-            panic!("player-rs: unsupported Windows target environment `{target_env}` (only MSVC is supported)")
-        }
-        other => panic!("player-rs: unsupported target OS `{other}`"),
-    };
-
-    let arch = match target_arch.as_str() {
-        "x86_64" => "x64",
-        "aarch64" => "arm64",
-        other => panic!("player-rs: unsupported target architecture `{other}`"),
-    };
-
-    format!("static_{os}_{arch}.zip")
+    archive::archive_name(&target_os, &target_arch, &target_env).unwrap_or_else(|e| panic!("player-rs: {e}"))
 }
 
 /// Downloads the given URL into memory, following redirects.

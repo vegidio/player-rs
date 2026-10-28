@@ -7,12 +7,12 @@ name: Test
 # `fail-fast: false` so one platform's failure doesn't hide the others.
 #
 # `xtask` is never built here: it only regenerates the bindings and drags in bindgen/libclang.
+#
+# Runs only when triggered manually: Actions tab -> Test -> "Run workflow", or
+# `gh workflow run test.yml --ref <branch>`.
 
 on:
-  push:
-    branches:
-      - main
-  pull_request:
+  workflow_dispatch:
 
 # Be resilient to flaky crates.io downloads on the runners.
 env:
