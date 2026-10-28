@@ -83,18 +83,18 @@ Alternatives considered: a GPUI entity as the main type (rejected because it tie
 
 ```
  Player (clone) --+
- Player (clone) --+--> Arc<Inner> { mpv: *mut mpv_handle, shared: Arc<Shared>, thread: JoinHandle }
+ Player (clone) --+--> Arc<Inner> { mpv: Arc<Handle>, shared: Arc<Shared>, thread: JoinHandle }
                                          |
-                    event thread --------+--> holds raw mpv ptr + Arc<Shared>, NOT Arc<Inner>
-                    loop mpv_wait_event(-1):
-                      property-change / file-loaded / end-file / seek / playback-restart
+                    event thread --------+--> holds Arc<Handle> + Arc<Shared>, NOT Arc<Inner>
+                    loop mpv_wait_event(-1), with a thread-local LoadTracker:
+                      property-change / start-file / file-loaded / end-file / seek / playback-restart / command-reply
                         -> update Shared.state (RwLock)  -> then fan out Event to subscribers
                       on MPV_EVENT_NONE with Shared.stop set -> exit
 
- Shared { state: RwLock<State>, subscribers: Mutex<Vec<flume::Sender<Event>>>, stop: AtomicBool, pending_loads: AtomicU32 }
+ Shared { state: RwLock<State>, subscribers: Mutex<Vec<flume::Sender<Event>>>, stop: AtomicBool }
 ```
 
-- `Inner` is dropped when the last `Player` clone goes. Its `Drop` sets `stop`, calls `mpv_wakeup` so `mpv_wait_event` returns, joins the thread, and only then calls `mpv_terminate_destroy`. That keeps the rule that no other thread is inside an mpv call on the handle when it is destroyed. The event thread never holds an `Arc<Inner>`, so there is no reference cycle and `Drop` is never run on the event thread (which would make the join deadlock).
+- `Inner` is dropped when the last `Player` clone goes. Its `Drop` sets `stop`, calls `mpv_wakeup` so `mpv_wait_event` returns, and joins the thread. Its `Arc<Handle>` is then the last one, and dropping it calls `mpv_terminate_destroy`. That keeps the rule that no other thread is inside an mpv call on the handle when it is destroyed. The event thread never holds an `Arc<Inner>`, so there is no reference cycle and `Drop` is never run on the event thread (which would make the join deadlock).
 - Slice 2 adds the render context to `Inner`. It must be freed in `Drop` before `mpv_terminate_destroy`, and this structure leaves room for that.
 - `mpv_handle` functions are thread-safe except `mpv_wait_event`, which only the event thread calls. That is why `Player` is `Send + Sync`. The raw pointer is wrapped in a private newtype with a documented `unsafe impl Send + Sync`.
 - **State before event**: the event thread writes the new value into `Shared.state` before sending the event. Every subscriber therefore sees a snapshot at least as new as the event it just received, as the spec requires.
@@ -113,8 +113,8 @@ Typed values are validated in `build()` before mpv is touched: volume must be fi
 ### Loading, autoplay and end of media
 
 - `load` checks the source, sets `pause` (and, for `Autoplay::Muted`, `mute=yes`) according to the autoplay mode, then sends `loadfile <src> replace` with `mpv_command_async`, so it never blocks on network I/O. Applying autoplay on every load matches Video.js, where `autoplay` applies to each new source.
-- **End of media follows Video.js, not mpv's default.** With `keep-open=yes`, mpv keeps the file loaded and paused at its end instead of unloading it. The event thread watches `eof-reached` and emits `Ended(Eof)` when it becomes true. When `play()` finds `eof-reached` set, it seeks to 0 before unpausing, so the media restarts the way Video.js does after `ended`.
-- **Replaced vs stopped**: mpv reports `MPV_END_FILE_REASON_STOP` in both cases. `load` increments `pending_loads` before sending `loadfile`. An END_FILE with reason STOP while a load is pending is reported as `Replaced`, and the matching FILE_LOADED or error END_FILE decrements the counter. `stop()` sends `stop`, which ends with `Stopped`.
+- **End of media follows Video.js, not mpv's default.** With `keep-open=yes`, mpv keeps the file loaded and paused at its end instead of unloading it. The event thread watches `eof-reached` and emits `Ended(Eof)` when it becomes true. When `play()` finds `eof-reached` set, it seeks to 0 before unpausing, so the media restarts the way Video.js does after `ended`. With `keep-open=no` the media unloads at its end and `Ended(Eof)` comes from END_FILE instead (only once, if `eof-reached` already announced it). Because no `eof-reached` change follows, `State.ended` is cleared on START_FILE, so new media never starts out as ended.
+- **Replaced vs stopped**: mpv reports `MPV_END_FILE_REASON_STOP` in both cases. The event thread keeps a `LoadTracker` that counts the `loadfile` commands mpv has accepted (successful COMMAND_REPLY events carrying the `load` reply id) since the current media started, and resets the count on START_FILE. mpv accepts a `loadfile` before it ends the media being replaced and starts the new media after, so an END_FILE with reason STOP while the count is above zero is reported as `Replaced`. Counting accepted commands, not requests, keeps the count right when several loads arrive before any of them starts, since mpv then starts only the last one. The tracker lives only on the event thread, so it needs no atomics. `stop()` sends `stop`, which ends with `Stopped`.
 - Errors that happen while loading arrive as END_FILE with reason ERROR. Its `error` code is turned into a message with `mpv_error_string` and reported as `Ended(Error(msg))`.
 
 ### Sources
@@ -123,7 +123,7 @@ Typed values are validated in `build()` before mpv is touched: volume must be fi
 
 ### Controls with no media
 
-`seek` and similar commands fail inside mpv when nothing is loaded. If `state().idle` is set, `Player` returns `Ok(())` without calling mpv. If the media unloads between that check and the command (a race), the resulting mpv command error is ignored. `play` and `pause` while idle just set the `pause` property, which is harmless, and the next `load` applies autoplay again anyway.
+`seek` and similar commands fail inside mpv when nothing is loaded. `Player` sends them anyway, and if one fails while mpv's `idle-active` is true, it returns `Ok(())` instead of the error. Checking after the command rather than before also covers media that unloads between the call and the command, with no separate race handling. `play` and `pause` while idle just set the `pause` property, which is harmless, and the next `load` applies autoplay again anyway.
 
 ### Seeking
 
@@ -183,6 +183,7 @@ mpv's messages come from `mpv_error_string`. Strings returned by `mpv_get_proper
 ### Tests without fixtures
 
 - Most integration tests load `av://lavfi:testsrc=duration=2:size=160x120:rate=25` with `ao=null` and `VideoOutput::Null`. mpv generates the media, so the tests need no files, display or sound device. `libavfilter` and `libavdevice` ship in every `binaries-mpv` archive.
+- The generated source has no duration until it has been read and cannot seek backwards. The scenarios that need either (loading with autoplay off, which checks the duration, and the relative seek backwards) play a two-second WAV instead.
 - The local-file tests (`Source::file`, including the `http:` directory case on Unix) write a one-second PCM WAV into a `rust-sak` temp dir. The header is 44 bytes, written by hand, so no audio crate is needed.
 - Waiting is always done with `recv_timeout` on events, never with sleeps, so slow CI legs cannot cause false failures.
 
@@ -198,7 +199,7 @@ All `unsafe` is in a private `mpv` module inside `crates/player`: handle creatio
 
 - [Unbounded subscriber channels grow if a subscriber stops reading, since `time-pos` changes many times per second] → This is documented on `subscribe()`: drop `Events` when it is no longer read. Throttling `PositionChanged` (Video.js `timeupdate` fires about every 250 ms) can be added later if needed, without breaking the API.
 - [`get_property` and `command` are synchronous and briefly wait for mpv's core lock] → Documented. Frontends read `state()` in render paths, and the control methods that touch the network (`load`) are asynchronous.
-- [The `pending_loads` heuristic for `Replaced` could misclassify an END_FILE if the user sends `loadfile` through the raw `command`] → Documented. Raw commands bypass the typed bookkeeping.
+- [The `LoadTracker` heuristic for `Replaced` could misclassify an END_FILE if the user sends `loadfile` through the raw `command`] → Documented. Raw commands bypass the typed bookkeeping.
 - [Exact seeks are slower on long-GOP media] → They are acceptable for this slice. A fast-seek option can come with the seek bar UI.
 - [`keep-open=yes` differs from the mpv CLI's default] → This is deliberate, for Video.js parity, and the raw `mpv_option("keep-open", "no")` override still works.
 - [The lavfi `testsrc` may not be available in some archive] → The first integration test checks for it and fails with a clear message. All six CI legs run it.

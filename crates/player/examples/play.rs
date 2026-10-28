@@ -6,6 +6,7 @@
 //! ```
 
 use player::prelude::*;
+use std::path::Path;
 use std::process::ExitCode;
 
 fn main() -> Result<ExitCode> {
@@ -13,7 +14,8 @@ fn main() -> Result<ExitCode> {
         eprintln!("usage: play <path or URL>");
         return Ok(ExitCode::from(2));
     };
-    let source = if arg.contains("://") { Source::url(&arg)? } else { Source::file(&arg)? };
+    // An existing path is a file even if it looks like a URL, such as `http://clip.mp4` (a directory named `http:`).
+    let source = if Path::new(&arg).exists() { Source::file(&arg)? } else { Source::url(&arg)? };
 
     let player = Player::builder().autoplay(Autoplay::On).build()?;
     let events = player.subscribe();

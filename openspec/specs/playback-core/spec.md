@@ -2,7 +2,7 @@
 
 Defines the toolkit-agnostic player that every frontend drives: how it is created and configured, how media is loaded and controlled, and how its state and events are observed, so that an app changing frontends keeps all of its playback code unchanged.
 
-## ADDED Requirements
+## Requirements
 
 ### Requirement: Player creation with validated options
 
@@ -118,7 +118,7 @@ At runtime, a player SHALL accept any volume or playback rate and clamp it to th
 
 #### Scenario: Mute keeps the volume
 - **WHEN** a player with volume 0.6 is muted and then unmuted
-- **THEN** the reported volume stays 0.6 throughout and audio is silent only while muted
+- **THEN** the reported volume stays 0.6 throughout and the player reports muted only between the two calls
 
 ### Requirement: Playback state snapshot
 

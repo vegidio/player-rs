@@ -314,7 +314,15 @@ pub(crate) fn run(mpv: &Handle, shared: &Shared) {
                 }
             }
             MpvEvent::CommandReply { id: LOAD_REPLY, error } if error >= 0 => loads.on_load_accepted(),
-            MpvEvent::StartFile => loads.on_start_file(),
+            MpvEvent::StartFile => {
+                loads.on_start_file();
+                // With `keep-open=no` the END_FILE that set `ended` unloads the media, so no `eof-reached` change
+                // clears it; new media has not ended.
+                shared.update(|state| {
+                    state.ended = false;
+                    None
+                });
+            }
             MpvEvent::FileLoaded => {
                 // The observed values may arrive after FILE_LOADED; read them so `Loaded` comes with a current state.
                 refresh(&[Property::Duration, Property::TimePos, Property::Pause]);

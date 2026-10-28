@@ -7,7 +7,7 @@
 
 ## 2. crates/player - player handle and events
 
-- [x] 2.1 Add `State`, `Event` and `EndReason` (`Clone`, `#[non_exhaustive]`), the `Shared` struct and the event thread: observe the properties in the design table, handle FILE_LOADED/END_FILE/SEEK/PLAYBACK_RESTART, update state before fanning out, prune dropped subscribers; verify `cargo build -p player-rs` and a unit test of END_FILE reason mapping (including `Replaced` via `pending_loads`) pass
+- [x] 2.1 Add `State`, `Event` and `EndReason` (`Clone`, `#[non_exhaustive]`), the `Shared` struct and the event thread: observe the properties in the design table, handle FILE_LOADED/END_FILE/SEEK/PLAYBACK_RESTART, update state before fanning out, prune dropped subscribers; verify `cargo build -p player-rs` and a unit test of END_FILE reason mapping (including `Replaced` via the `LoadTracker`) pass
 - [x] 2.2 Add `Player` (`Arc<Inner>`) with `builder()`, `state()`, `subscribe()` returning `Events` (`recv`, `try_recv`, `recv_timeout`, `recv_async`, `Iterator`) and the `Drop` order from design (stop flag, `mpv_wakeup`, join, `mpv_terminate_destroy`); verify a test that drops the last clone while lavfi media plays returns within one second
 - [x] 2.3 Add `load` (autoplay applied per load, `loadfile ... replace` via async command), `play` (restart from 0 after `eof-reached`), `pause`, `toggle_pause`, `stop` and `seek` (`absolute+exact` / `relative+exact`) with the idle no-op rule; verify `cargo build -p player-rs`
 - [x] 2.4 Add `set_volume`, `set_muted`, `set_rate` with runtime clamping, plus public `get_property`, `set_property` and `command`; verify unit-level tests for clamping (1.3 -> 1.0, 0.0 -> 0.01) and mute keeping the volume pass
@@ -19,4 +19,4 @@
 
 - [x] 3.1 Update `README.md` (status, a playback usage example, the `play` example, `keep-open`/Video.js end-of-media behaviour) and confirm `.github/workflows/test.yml` runs the new tests on all six legs with no extra setup; verify every README command runs locally
 - [x] 3.2 Run `cargo fmt --check`, `cargo clippy --workspace --exclude xtask --all-targets -- -D warnings` and `cargo test --workspace --exclude xtask` locally on macOS and confirm `cargo package -p player-rs --list` still succeeds with the git dev-dependency
-- [ ] 3.3 With the user's approval, push a branch and trigger the manual `test` workflow; verify the lint job and all six legs (macOS arm64/x64, Linux x64/arm64, Windows x64/arm64) pass
+- [x] 3.3 With the user's approval, push a branch and trigger the manual `test` workflow; verify the lint job and all six legs (macOS arm64/x64, Linux x64/arm64, Windows x64/arm64) pass

@@ -1,7 +1,7 @@
 //! Playback behaviour against media mpv generates itself (`av://lavfi:testsrc`), with null audio and no video output,
 //! so no media files, display or sound device are needed. The generated source has no duration until it has been read
-//! and cannot seek backwards, so those scenarios use a WAV file written into a temporary directory instead. Waiting is always done on events with a deadline, never
-//! with sleeps, so slow CI machines cannot cause false failures.
+//! and cannot seek backwards, so those scenarios use a WAV file written into a temporary directory instead. Waiting is
+//! always done on events with a deadline, never with sleeps, so slow CI machines cannot cause false failures.
 
 mod common;
 
@@ -279,6 +279,24 @@ fn play_to_the_end_then_play_again() {
     });
     let restarted_at = state.position.unwrap();
     wait_position_past(&events, restarted_at);
+}
+
+#[test]
+fn ended_resets_on_next_load_without_keep_open() {
+    let player = Player::builder()
+        .autoplay(Autoplay::On)
+        .mpv_option("ao", "null")
+        .mpv_option("keep-open", "no")
+        .build()
+        .unwrap();
+    let events = player.subscribe();
+    load(&player, &events);
+
+    wait_for(&events, "the end of the media", |e| *e == Event::Ended(EndReason::Eof));
+    assert!(player.state().ended);
+
+    load(&player, &events);
+    assert!(!player.state().ended);
 }
 
 #[test]
