@@ -7,7 +7,7 @@ mod common {
     pub mod gl;
 }
 
-use common::gl::{Framebuffer, Gl, Image};
+use common::gl::{self, Framebuffer, Gl, Image};
 use player::prelude::*;
 use std::collections::HashSet;
 use std::sync::mpsc::{self, Receiver};
@@ -125,6 +125,9 @@ fn difference(a: &Image, b: &Image) -> f64 {
 
 #[test]
 fn frame_ready_notification_while_playing() {
+    if gl::skipped() {
+        return;
+    }
     let mut rig = rig(Autoplay::On);
     let framebuffer = rig.gl.framebuffer(160, 120, [0, 0, 0, 255]);
     rig.player.load(source()).unwrap();
@@ -144,6 +147,9 @@ fn frame_ready_notification_while_playing() {
 
 #[test]
 fn pattern_is_drawn() {
+    if gl::skipped() {
+        return;
+    }
     let mut rig = rig(Autoplay::Off);
     // A colour the test pattern is unlikely to contain, to see that the whole framebuffer is drawn over.
     let fill = [3, 141, 59, 255];
@@ -163,6 +169,9 @@ fn pattern_is_drawn() {
 
 #[test]
 fn aspect_ratio_is_kept_with_black_bars() {
+    if gl::skipped() {
+        return;
+    }
     let mut rig = rig(Autoplay::Off);
     let framebuffer = rig.gl.framebuffer(320, 120, [255, 0, 255, 255]);
     rig.load_first_frame(&framebuffer);
@@ -181,6 +190,9 @@ fn aspect_ratio_is_kept_with_black_bars() {
 
 #[test]
 fn vertical_flip() {
+    if gl::skipped() {
+        return;
+    }
     let mut rig = rig(Autoplay::Off);
     let framebuffer = rig.gl.framebuffer(160, 120, [0, 0, 0, 255]);
     rig.load_first_frame(&framebuffer);
@@ -201,6 +213,9 @@ fn vertical_flip() {
 
 #[test]
 fn black_with_nothing_loaded() {
+    if gl::skipped() {
+        return;
+    }
     let mut rig = rig(Autoplay::Off);
     let framebuffer = rig.gl.framebuffer(160, 120, [255, 0, 255, 255]);
 
@@ -215,6 +230,9 @@ fn black_with_nothing_loaded() {
 
 #[test]
 fn playback_advances_without_report_swap() {
+    if gl::skipped() {
+        return;
+    }
     let mut rig = rig(Autoplay::On);
     let framebuffer = rig.gl.framebuffer(160, 120, [0, 0, 0, 255]);
     rig.player.load(source()).unwrap();
@@ -228,6 +246,9 @@ fn playback_advances_without_report_swap() {
 
 #[test]
 fn zero_sized_target_is_rejected() {
+    if gl::skipped() {
+        return;
+    }
     let mut rig = rig(Autoplay::Off);
     let framebuffer = rig.gl.framebuffer(160, 120, [255, 0, 255, 255]);
     rig.load_first_frame(&framebuffer);
@@ -249,6 +270,9 @@ fn zero_sized_target_is_rejected() {
 
 #[test]
 fn video_size() {
+    if gl::skipped() {
+        return;
+    }
     let mut rig = rig(Autoplay::On);
     let framebuffer = rig.gl.framebuffer(160, 120, [0, 0, 0, 255]);
     let events = rig.player.subscribe();
@@ -291,6 +315,9 @@ fn bounded_drop<T>(value: T, what: &str) {
 
 #[test]
 fn second_render_context_fails_and_the_first_keeps_working() {
+    if gl::skipped() {
+        return;
+    }
     let mut rig = rig(Autoplay::Off);
     // SAFETY: as in `render_context`.
     let second = unsafe { RenderContext::new(&rig.player, rig.gl.loader(), || {}) };
@@ -303,6 +330,9 @@ fn second_render_context_fails_and_the_first_keeps_working() {
 
 #[test]
 fn render_context_can_be_recreated_after_drop() {
+    if gl::skipped() {
+        return;
+    }
     let gl = Gl::new();
     let player = render_player(Autoplay::Off);
     let (first, _frames) = render_context(&gl, &player);
@@ -315,6 +345,9 @@ fn render_context_can_be_recreated_after_drop() {
 
 #[test]
 fn no_notification_after_drop() {
+    if gl::skipped() {
+        return;
+    }
     let mut rig = rig(Autoplay::On);
     let framebuffer = rig.gl.framebuffer(160, 120, [0, 0, 0, 255]);
     let events = rig.player.subscribe();
@@ -333,6 +366,9 @@ fn no_notification_after_drop() {
 
 #[test]
 fn drop_render_context_while_playing() {
+    if gl::skipped() {
+        return;
+    }
     let mut rig = rig(Autoplay::On);
     let framebuffer = rig.gl.framebuffer(160, 120, [0, 0, 0, 255]);
     let events = rig.player.subscribe();
@@ -357,6 +393,9 @@ fn drop_render_context_while_playing() {
 
 #[test]
 fn drop_player_before_render_context() {
+    if gl::skipped() {
+        return;
+    }
     let mut rig = rig(Autoplay::On);
     let framebuffer = rig.gl.framebuffer(160, 120, [0, 0, 0, 255]);
     rig.player.load(source()).unwrap();
@@ -386,6 +425,9 @@ fn drop_player_before_render_context() {
 
 #[test]
 fn load_before_render_context_plays_without_video() {
+    if gl::skipped() {
+        return;
+    }
     let gl = Gl::new();
     let player = render_player(Autoplay::On);
     let events = player.subscribe();

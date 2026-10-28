@@ -86,9 +86,12 @@ jobs:
           - name: Windows x64
             runner: windows-latest
             target: x86_64-pc-windows-msvc
+          # No software OpenGL exists for Windows arm64 (mesa-dist-win builds x64 and x86 only, and an arm64
+          # process cannot load x64 DLLs); the runner offers only GDI's OpenGL 1.1. The GL tests are skipped there.
           - name: Windows arm64
             runner: windows-11-arm
             target: aarch64-pc-windows-msvc
+            skip_gl: true
     steps:
       - uses: actions/checkout@v4
 
@@ -117,8 +120,7 @@ jobs:
 
       # The system's GDI OpenGL is version 1.1, which mpv cannot use. Mesa's `opengl32.dll` placed next to the test
       # binaries is loaded instead, since Windows searches the executable's folder first. Only the tests use it;
-      # shipped apps keep importing the system's DLLs. mesa-dist-win has no arm64 build, so that leg uses the
-      # runner's own OpenGL.
+      # shipped apps keep importing the system's DLLs.
       - name: Install Mesa OpenGL (Windows x64)
         if: matrix.target == 'x86_64-pc-windows-msvc'
         shell: bash
@@ -136,3 +138,4 @@ jobs:
           # tests ask CGL for Apple's software renderer.
           LIBGL_ALWAYS_SOFTWARE: "1"
           GALLIUM_DRIVER: llvmpipe
+          PLAYER_TEST_SKIP_GL: ${{ matrix.skip_gl && '1' || '' }}

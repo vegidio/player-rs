@@ -100,6 +100,7 @@ The tests need no media files, display, GPU or sound device: they play media mpv
 - **macOS:** Apple's software renderer, built in. Set `PLAYER_TEST_GL=hardware` to run them on the GPU instead.
 - **Linux:** Mesa's EGL and llvmpipe (`sudo apt-get install libegl1 libegl-mesa0 libgl1-mesa-dri`; set `LIBGL_ALWAYS_SOFTWARE=1` to use llvmpipe on a machine with a GPU).
 - **Windows:** the system's OpenGL is version 1.1 without a GPU driver, too old for mpv. CI copies Mesa's `opengl32.dll` and `libgallium_wgl.dll` from [mesa-dist-win](https://github.com/pal1000/mesa-dist-win) next to the test binaries (`target/<triple>/debug/deps`) and sets `GALLIUM_DRIVER=llvmpipe`. Only the tests use them; applications keep using the system's OpenGL.
+- **Windows arm64:** no software OpenGL exists (mesa-dist-win builds x64 and x86 only), so CI skips the GL tests there by setting `PLAYER_TEST_SKIP_GL=1`. Rendering on Windows arm64 is therefore not verified by CI; it needs a machine with a GPU driver.
 
 On the first build `crates/player/build.rs` downloads the `binaries-mpv` release pinned in [`crates/player/mpv-version.txt`](crates/player/mpv-version.txt) for the target (35-70 MB) and caches it in Cargo's `OUT_DIR`; later builds reuse it. The link line is derived from the archive's own `lib/pkgconfig/*.pc` files, so no `pkg-config` binary is needed.
 

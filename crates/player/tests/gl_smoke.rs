@@ -5,10 +5,13 @@ mod common {
     pub mod gl;
 }
 
-use common::gl::Gl;
+use common::gl::{self, Gl};
 
 #[test]
 fn clears_and_reads_back_a_framebuffer() {
+    if gl::skipped() {
+        return;
+    }
     let gl = Gl::new();
     eprintln!("GL renderer: {}", gl.renderer());
 
@@ -25,6 +28,9 @@ fn clears_and_reads_back_a_framebuffer() {
 
 #[test]
 fn loader_resolves_gl_functions() {
+    if gl::skipped() {
+        return;
+    }
     let gl = Gl::new();
     let mut loader = gl.loader();
     assert!(!loader(c"glGetString").is_null());

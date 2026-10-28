@@ -142,6 +142,8 @@ Pixel checks compare against properties of `lavfi testsrc` (several distinct col
 
 Everything is in `crates/player`, which still has no GUI dependency, and the API uses only GL concepts (a loader and an FBO name), no toolkit types. A future egui frontend over glow passes egui's loader and its framebuffer and needs nothing else. A GPUI or egui-wgpu frontend gets a GL context and texture from slice 4's core code and passes them in the same way. GPUI-Kit vs raw GPUI does not apply: no UI in this slice.
 
+**Outcome on CI (task 1.2):** macOS, Linux and Windows x64 get software contexts as planned (Apple Software Renderer, llvmpipe through EGL, Mesa's `opengl32.dll`). Windows arm64 cannot: mesa-dist-win builds only x64 and x86 (both its MSVC and MinGW releases), an arm64 process cannot load x64 DLLs, and the runner offers only "GDI Generic" (OpenGL 1.1, no framebuffer objects). Running the leg as x64 under emulation would test the x64 build, which the Windows x64 leg already covers. So the leg sets `PLAYER_TEST_SKIP_GL=1` and the GL tests return early with a message. **Gap:** rendering on Windows arm64 is not verified by CI. The render code has no architecture-specific path, so the x64 leg covers its logic.
+
 ## Risks / Trade-offs
 
 - [glutin cannot make a headless context on some CI leg (for example WGL without a window, or Rosetta CGL)] → Task 1.1 is a spike that proves contexts on every leg before the render code depends on them. The fallback is a small raw FFI helper for that platform. If a leg cannot get software GL at all, its render tests are skipped with a message and the gap is written down in the README and in this design.

@@ -5,12 +5,25 @@
 //!   `PLAYER_TEST_GL=hardware` to use the GPU instead. glutin cannot select the software renderer.
 //! - Linux: EGL on a device, with no window or surface. On CI, Mesa's llvmpipe (`LIBGL_ALWAYS_SOFTWARE=1`).
 //! - Windows: WGL on a hidden window, which WGL needs to create a context. On CI, Mesa's `opengl32.dll`.
+//!
+//! Where no OpenGL 2.1 or later is available, set `PLAYER_TEST_SKIP_GL=1` and every test using this helper passes
+//! without running (see [`skipped`]). CI does so on Windows arm64, which has no software OpenGL to install.
 
 // Each test binary uses a different part of this helper.
 #![allow(dead_code)]
 
 use glow::HasContext;
 use std::ffi::{CStr, c_void};
+
+/// Whether GL tests are skipped on this machine, because `PLAYER_TEST_SKIP_GL` is set. Each such test starts with
+/// `if gl::skipped() { return; }`.
+pub fn skipped() -> bool {
+    let skipped = std::env::var("PLAYER_TEST_SKIP_GL").is_ok_and(|value| !value.is_empty());
+    if skipped {
+        eprintln!("skipped: PLAYER_TEST_SKIP_GL is set, so no OpenGL context is created");
+    }
+    skipped
+}
 
 /// A function resolving GL function names for the current context, as mpv's render API wants it.
 pub type Loader = Box<dyn FnMut(&CStr) -> *const c_void + Send + 'static>;
