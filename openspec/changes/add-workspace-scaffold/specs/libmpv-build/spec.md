@@ -60,6 +60,10 @@ The core crate SHALL link libmpv and every library it depends on that the archiv
 - **WHEN** a binary in another crate depends on the core crate (directly, or through the GUI crate) and is built
 - **THEN** it links successfully without the developer adding linker flags, and it runs without mpv or FFmpeg installed on the system
 
+#### Scenario: macOS x64 deployment target
+- **WHEN** a binary is built for x86_64 macOS with `MACOSX_DEPLOYMENT_TARGET` unset or below `10.15`
+- **THEN** the build fails with an error telling the developer to set `MACOSX_DEPLOYMENT_TARGET` to at least `10.15`, the minimum the x86_64 libmpv is built for. This is the one setting a downstream app has to provide: below `10.14.4` the Swift runtime libmpv uses is linked through `@rpath` and the binary would not start
+
 #### Scenario: macOS runtime dependencies
 - **WHEN** a binary linked on macOS is inspected for dynamic dependencies
 - **THEN** it depends only on Apple system frameworks and libraries shipped with the OS

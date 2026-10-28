@@ -7,3 +7,10 @@
 [alias]
 cov = "llvm-cov --workspace --exclude xtask --ignore-filename-regex src/sys/bindings\\.rs --html --open"
 cov-lcov = "llvm-cov --workspace --exclude xtask --ignore-filename-regex src/sys/bindings\\.rs --lcov --output-path target/coverage/lcov.info"
+
+# The x86_64 macOS archive of libmpv is built for macOS 10.15, and it uses Swift, which ships
+# with the OS only from 10.14.4. Rust's x86_64-apple-darwin default (10.12) would link the Swift
+# libraries through `@rpath` and the binaries would not start. aarch64 is unaffected (its minimum
+# is 11.0). Apps depending on player-rs need the same setting; `build.rs` fails without it.
+[env]
+MACOSX_DEPLOYMENT_TARGET = "10.15"

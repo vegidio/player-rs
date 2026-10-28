@@ -49,9 +49,22 @@ sudo apt-get install libx11-dev libxext-dev libxfixes-dev libxrandr-dev libxss-d
 
 `build.rs` reads their `.pc` files from `PKG_CONFIG_PATH`, then `PKG_CONFIG_LIBDIR` or the standard system directories. A missing one fails the build with the name of the module to install.
 
-### macOS and Windows
+### macOS
 
-Nothing to install. Binaries depend only on system frameworks/libraries (macOS) or on Windows system DLLs and the Visual C++ runtime (Windows); no DLL has to ship next to the executable.
+Nothing to install; binaries depend only on system frameworks and libraries.
+
+For **x86_64** macOS, set the deployment target to at least 10.15, the minimum the x86_64 libmpv is built for. Rust's default for that target is 10.12, which would link mpv's Swift runtime through `@rpath` and produce binaries that fail to start, so `build.rs` refuses to build without it. Add this to your app's `.cargo/config.toml` (this repository already does):
+
+```toml
+[env]
+MACOSX_DEPLOYMENT_TARGET = "10.15"
+```
+
+Apple Silicon builds are unaffected.
+
+### Windows
+
+Nothing to install. Binaries depend only on Windows system DLLs and the Visual C++ runtime; no DLL has to ship next to the executable.
 
 ### Offline or custom builds: `PLAYER_BINARIES_DIR`
 

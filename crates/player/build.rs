@@ -45,14 +45,49 @@ fn main() {
     println!("cargo:rerun-if-env-changed=PLAYER_BINARIES_DIR");
     println!("cargo:rerun-if-env-changed=PKG_CONFIG_PATH");
     println!("cargo:rerun-if-env-changed=PKG_CONFIG_LIBDIR");
+    println!("cargo:rerun-if-env-changed=MACOSX_DEPLOYMENT_TARGET");
 
     // docs.rs builds without network access; the committed bindings are enough to document the crate.
     if env::var_os("DOCS_RS").is_some() {
         return;
     }
 
+    check_macos_deployment_target();
     let binaries_dir = locate_binaries();
     emit_link_directives(&binaries_dir.join("lib"));
+}
+
+/// Minimum macOS version of the x86_64 archive. libmpv uses Swift, which ships with the OS only from 10.14.4: linked
+/// for an older target (Rust's x86_64 default is 10.12), the Swift libraries are referenced through `@rpath` and the
+/// binary fails to start. aarch64 targets start at 11.0 and are unaffected.
+const MACOS_X64_MIN_VERSION: (u32, u32) = (10, 15);
+
+/// Fails the build on x86_64 macOS unless `MACOSX_DEPLOYMENT_TARGET` is at least [`MACOS_X64_MIN_VERSION`]. A build
+/// script cannot raise the deployment target of the final link, so the app has to set it.
+fn check_macos_deployment_target() {
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos")
+        || env::var("CARGO_CFG_TARGET_ARCH").as_deref() != Ok("x86_64")
+    {
+        return;
+    }
+
+    let target = env::var("MACOSX_DEPLOYMENT_TARGET").unwrap_or_default();
+    let mut parts = target.split('.').map(|p| p.parse::<u32>());
+    let version = match (parts.next(), parts.next()) {
+        (Some(Ok(major)), Some(Ok(minor))) => Some((major, minor)),
+        (Some(Ok(major)), None) => Some((major, 0)),
+        _ => None,
+    };
+
+    let (major, minor) = MACOS_X64_MIN_VERSION;
+    if version.is_none_or(|v| v < MACOS_X64_MIN_VERSION) {
+        let current = if target.is_empty() { "unset, so Rust's default of 10.12 applies".to_string() } else { target };
+        panic!(
+            "player-rs: x86_64 macOS builds need MACOSX_DEPLOYMENT_TARGET >= {major}.{minor} (currently {current}); \
+             libmpv is built for {major}.{minor} and its Swift runtime would not load on older targets. Set it in your \
+             environment or in `.cargo/config.toml`:\n\n[env]\nMACOSX_DEPLOYMENT_TARGET = \"{major}.{minor}\"\n"
+        );
+    }
 }
 
 /// Returns the directory containing the `include/` and `lib/` subdirectories, either from the `PLAYER_BINARIES_DIR`
