@@ -1,0 +1,16 @@
+prefix=${pcfiledir}/../..
+includedir=${prefix}/include
+libdir=${prefix}/lib
+
+libva_version=2.24.1
+va_api_version=1.24.0
+display=drm
+
+Name: va-drm
+Description: Userspace Video Acceleration (VA) DRM interface
+Version: 1.24.0
+
+Libs: "-L${libdir}" -lva-drm
+Requires: libva
+Cflags: "-I${includedir}"
+Requires.private: libdrm

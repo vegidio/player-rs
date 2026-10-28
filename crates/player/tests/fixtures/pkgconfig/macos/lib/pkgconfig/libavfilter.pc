@@ -1,0 +1,13 @@
+prefix=${pcfiledir}/../..
+exec_prefix=${prefix}
+libdir=${prefix}/lib
+includedir=${prefix}/include
+
+Name: libavfilter
+Description: FFmpeg audio/video filtering library
+Version: 12.1.102
+Conflicts:
+
+Libs: "-L${libdir}" -lavfilter -framework OpenGL -framework OpenGL -pthread -lm "-L${prefix}/lib/pkgconfig/../../lib" -lz "-L${prefix}/lib/pkgconfig/../../lib" -lharfbuzz -lc++ -lfreetype -lbz2 -lpng16 -lz -lbrotlidec -lbrotlicommon -lm "-L${prefix}/lib/pkgconfig/../../lib" -lfribidi -framework VideoToolbox "-L${prefix}/lib/pkgconfig/../../lib" -lass -framework ApplicationServices -framework CoreFoundation -lfribidi -lharfbuzz -lc++ -lfontconfig -liconv -lfreetype -lbz2 -lpng16 -lz -lbrotlidec -lbrotlicommon -lexpat -lm -framework CoreImage -framework AppKit "-L${prefix}/lib/pkgconfig/../../lib" -lfontconfig -liconv -lfreetype -lbz2 -lpng16 -lz -lbrotlidec -lbrotlicommon -lexpat -lm "-L${prefix}/lib/pkgconfig/../../lib" -lfreetype -lbz2 -lpng16 -lz -lbrotlidec -lbrotlicommon -lm -framework CoreFoundation -framework CoreMedia -framework CoreVideo -framework CoreServices
+Requires: libswscale >= 10.1.102, libavformat >= 63.1.102, libavcodec >= 63.1.102, libswresample >= 7.1.102, libavutil >= 61.1.102 
+Cflags: "-I${includedir}"

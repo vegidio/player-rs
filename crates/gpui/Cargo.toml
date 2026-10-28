@@ -1,0 +1,18 @@
+[package]
+name = "player-gpui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+description = "A Video.js-style video player component for GPUI apps, built on player-rs."
+readme = "../../README.md"
+keywords = ["mpv", "video", "player", "gpui"]
+categories = ["multimedia::video", "gui"]
+
+[lib]
+name = "player_gpui"
+
+[dependencies]
+player-rs = { path = "../player", version = "26.10.0" }

@@ -1,0 +1,11 @@
+prefix=${pcfiledir}/../..
+includedir=${prefix}/include
+libdir=${prefix}/lib
+
+Name: mpv
+Description: mpv media player client library
+Version: 2.5.0
+
+Libs: "-L${libdir}" -lmpv -latomic -pthread -lm -lrt
+Requires: wayland-client >=  1.21.0, libass >=  0.12.2, libavcodec >=  60.31.102, libavfilter >=  9.12.100, libavformat >=  60.16.100, libavutil >=  58.29.100, libplacebo >= 6.338.2, libswresample >=  4.12.100, libswscale >=  7.5.100, dvdnav >=  4.2.0, mujs >=  1.0.0, lcms2 >=  2.6, libarchive >=  3.4.0, libavdevice >=  60.3.100, libbluray >=  0.5.0, luajit >=  2.0.0, uchardet, xfixes >=  1.0.0, x11 >=  1.0.0, zimg >=  2.9, zlib, alsa >=  1.0.18, libpipewire-0.3 >=  0.3.57, libpulse >=  1.0, libdrm >=  2.4.105, libdisplay-info >=  0.1.1, gbm >=  17.1.0, libjpeg, wayland-cursor >=  1.21.0, wayland-protocols >=  1.31, xkbcommon >=  0.3.0, xscrnsaver >=  1.0.0, xext >=  1.0.0, xpresent >=  1.0.0, xrandr >=  1.4.0, egl >=  1.4.0, wayland-egl >=  9.0.0, vulkan >=  1.3.238, ffnvcodec >=  11.1.5.1, libva-drm >=  1.1.0, libva-wayland >=  1.1.0, libva-x11 >=  1.1.0, libva >=  1.1.0, vdpau >=  0.2
+Cflags: "-I${includedir}" -pthread

@@ -1,0 +1,12 @@
+prefix=/usr
+includedir=${prefix}/include
+libdir=${prefix}/lib/aarch64-linux-gnu
+
+moduledir=${libdir}/pipewire-0.3
+
+Name: libpipewire
+Description: PipeWire Interface
+Version: 1.0.5
+Requires: libspa-0.2
+Libs: -L${libdir} -lpipewire-0.3
+Cflags: -I${includedir}/pipewire-0.3 -D_REENTRANT

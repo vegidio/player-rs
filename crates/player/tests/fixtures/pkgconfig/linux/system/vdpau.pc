@@ -1,0 +1,11 @@
+prefix=/usr
+includedir=${prefix}/include
+libdir=${prefix}/lib/aarch64-linux-gnu
+
+moduledir=/usr/lib/aarch64-linux-gnu/vdpau
+
+Name: VDPAU
+Description: The Video Decode and Presentation API for UNIX
+Version: 1.5
+Libs: -L${libdir} -lvdpau
+Cflags: -I${includedir}

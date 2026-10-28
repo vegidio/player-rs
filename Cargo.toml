@@ -1,0 +1,11 @@
+[workspace]
+resolver = "3"
+members = ["crates/player", "crates/gpui", "xtask"]
+
+[workspace.package]
+version = "26.10.0"
+edition = "2024"
+license = "Apache-2.0"
+repository = "https://github.com/vegidio/player-rs"
+homepage = "https://github.com/vegidio/player-rs"
+authors = ["Vinicius Egidio <me@vinicius.io>"]

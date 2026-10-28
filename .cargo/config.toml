@@ -1,0 +1,9 @@
+# Convenience aliases for code coverage. Both require `cargo-llvm-cov`:
+#   rustup component add llvm-tools-preview && cargo install cargo-llvm-cov
+#
+# `--ignore-filename-regex` drops the machine-generated FFI (`src/sys/bindings.rs`) from the
+# report: `extern` declarations, type aliases and constants that can't be "executed" and would
+# otherwise understate real coverage. `xtask` is dev-only tooling and is excluded.
+[alias]
+cov = "llvm-cov --workspace --exclude xtask --ignore-filename-regex src/sys/bindings\\.rs --html --open"
+cov-lcov = "llvm-cov --workspace --exclude xtask --ignore-filename-regex src/sys/bindings\\.rs --lcov --output-path target/coverage/lcov.info"

@@ -1,0 +1,9 @@
+prefix=/usr
+includedir=${prefix}/include
+libdir=${prefix}/lib/aarch64-linux-gnu
+
+Name: EGL
+Description: EGL library and headers
+Version: 1.5
+Libs: -L${libdir} -lEGL
+Cflags: -I${includedir}

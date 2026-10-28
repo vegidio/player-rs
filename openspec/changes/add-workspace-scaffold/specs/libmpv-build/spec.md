@@ -66,7 +66,7 @@ The core crate SHALL link libmpv and every library it depends on that the archiv
 
 #### Scenario: Linux runtime dependencies
 - **WHEN** a binary linked on Linux is inspected for dynamic dependencies
-- **THEN** it depends only on the C/C++ runtime and the system display and audio stacks (X11, Wayland, EGL/GL, GBM, libdisplay-info, VDPAU, PulseAudio, PipeWire, ALSA) that the archive leaves dynamic
+- **THEN** it depends only on the C/C++ runtime, the Vulkan loader, and the system display and audio stacks (X11, Wayland, EGL/GL, GBM, libdisplay-info, VDPAU, PulseAudio, PipeWire) that the archive leaves dynamic
 
 #### Scenario: Windows runtime dependencies
 - **WHEN** a binary linked for a Windows MSVC target is inspected for DLL imports

@@ -1,0 +1,11 @@
+prefix=${pcfiledir}/../..
+includedir=${prefix}/include
+libdir=${prefix}/lib
+
+Name: mpv
+Description: mpv media player client library
+Version: 2.5.0
+
+Libs: "-L${libdir}" -lmpv -lavrt -ldwmapi -lgdi32 -limm32 -lntdll -lole32 -lpathcch -lshcore -luser32 -luuid -luxtheme -lversion -liconv ${prefix}/lib/spirv-cross-glsl.lib ${prefix}/lib/spirv-cross-hlsl.lib ${prefix}/lib/spirv-cross-msl.lib ${prefix}/lib/spirv-cross-cpp.lib ${prefix}/lib/spirv-cross-reflect.lib ${prefix}/lib/spirv-cross-util.lib ${prefix}/lib/spirv-cross-core.lib -lopengl32
+Requires: libass >=  0.12.2, libavcodec >=  60.31.102, libavfilter >=  9.12.100, libavformat >=  60.16.100, libavutil >=  58.29.100, libplacebo >= 6.338.2, libswresample >=  4.12.100, libswscale >=  7.5.100, dvdnav >=  4.2.0, mujs >=  1.0.0, lcms2 >=  2.6, libarchive >=  3.4.0, libavdevice >=  60.3.100, libbluray >=  0.5.0, luajit >=  2.0.0, uchardet, zimg >=  2.9, zlib, libjpeg, shaderc, spirv-cross-c, ffnvcodec >=  11.1.5.1
+Cflags: "-I${includedir}"

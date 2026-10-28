@@ -66,7 +66,9 @@ Alternatives:
   - `-l<name>` -> `static=<name>` if the archive's `lib/` holds `lib<name>.a` / `<name>.lib`, else `dylib=<name>`
   - `-framework X` -> `framework=X`
   - absolute paths to `.a` files (the MinGW-style entries in `mpv.pc`) -> link search on the parent, `static=` on the stem
-  - `-pthread` -> `dylib=pthread` on Linux; other flags are ignored.
+  - `-pthread` -> `dylib=pthread` on Linux; `-lstdc++` -> `dylib=c++` on macOS (the SDK no longer ships libstdc++; `uchardet.pc` and `zimg.pc` name it); `-Wl,-E` (from `luajit.pc`) is ignored. Any other flag fails the build.
+  - A `Requires` module with no `.pc` in the archive is a system library (on Linux: X11, Wayland, EGL, GBM, libdrm, libdisplay-info, VDPAU, PulseAudio, PipeWire). It is read with the same reader from the host's pkg-config directories (`PKG_CONFIG_PATH`, then `PKG_CONFIG_LIBDIR` or the standard `/usr/lib/<multiarch>/pkgconfig`, `/usr/lib/pkgconfig`, `/usr/share/pkgconfig`), following only `Libs` and `Requires`; its `-l` names follow the rule below, so libdrm, whose `libdrm.a` the archive ships, stays static. No `pkg-config` binary is needed. A module found nowhere fails the build naming it, which tells the developer which `-dev` package to install.
+  - A `-l` name the archive's `lib/` does not hold is linked as `dylib`, whichever `.pc` file named it. On Linux this includes the Vulkan loader: the archive ships `vulkan.pc` but no `libvulkan.a`. ALSA, by contrast, ships as `libasound.a` and is static.
   Duplicates are removed keeping the last occurrence, so dependencies stay after dependents.
 
 Libraries are emitted as `cargo:rustc-link-lib`, not `rustc-link-arg`: link args apply only to this package's own targets, so downstream crates would not link (the `media-rs` lesson). The static archives are bundled into the rlib.
@@ -79,9 +81,9 @@ Alternatives: bindgen in `build.rs` (`avif-rs`) forces libclang on every consume
 
 `xtask bindings` downloads the host archive (same logic as `build.rs`, duplicated because a build script is not a library), runs bindgen over a header that includes the four mpv headers, allowlists `mpv_.*` / `MPV_.*`, and writes `crates/player/src/sys/bindings.rs`. One run on any host is enough because the headers have no platform types.
 
-C enums are emitted as constified enums with a fixed `c_int` repr (bindgen otherwise picks `u32` on GCC/Clang targets and `i32` on MSVC), so one file is correct everywhere. `src/sys.rs` carries the `allow` attributes generated FFI needs (naming lints, `missing_docs`, `clippy::missing_safety_doc`).
+C enums are emitted as constified enums with a fixed `c_int` repr (bindgen otherwise picks `u32` on GCC/Clang targets and `i32` on MSVC), so one file is correct everywhere. `src/sys.rs` carries the `allow` attributes generated FFI needs (naming lints, `missing_docs`). Comments are not generated: the header comments contain indented C snippets that rustdoc would run as doctests, so the headers stay the reference for the raw API.
 
-`MPV_CLIENT_API_VERSION` is a C macro built from `MPV_MAKE_VERSION`; if bindgen does not evaluate it, `xtask` computes it from `MPV_CLIENT_API_VERSION_MAJOR`/`MINOR` and appends it as a constant.
+`MPV_CLIENT_API_VERSION` is a C macro built from `MPV_MAKE_VERSION(major, minor)`, which bindgen cannot evaluate; `xtask` reads the two numbers from that `#define` in `client.h` and appends the constant.
 
 ### Smoke API
 
@@ -121,4 +123,4 @@ Not applicable: first code in the repository.
 
 ## Open Questions
 
-- Exact Linux `-dev` package list for the CI runners. Found during implementation from the `.pc` closure; does not change the approach.
+None. The Linux `-dev` package list was derived from the `.pc` closure and checked by linking in an Ubuntu 24.04 container: `libx11-dev libxext-dev libxfixes-dev libxrandr-dev libxss-dev libxpresent-dev libx11-xcb-dev libxcb-dri3-dev libxkbcommon-dev libwayland-dev wayland-protocols libegl-dev libgbm-dev libdrm-dev libdisplay-info-dev libvdpau-dev libpulse-dev libpipewire-0.3-dev libvulkan-dev`.

@@ -1,0 +1,11 @@
+prefix=${pcfiledir}/../..
+includedir=${prefix}/include
+libdir=${prefix}/lib
+
+Name: libbluray
+Description: library supporting Blu-ray playback
+Version: 1.5.1
+
+Libs: "-L${libdir}" -lbluray -lgdi32
+Requires: freetype2, libudfread >=  1.2.0, libxml-2.0 >=  2.6
+Cflags: "-I${includedir}"

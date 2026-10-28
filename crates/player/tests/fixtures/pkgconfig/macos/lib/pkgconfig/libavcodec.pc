@@ -1,0 +1,13 @@
+prefix=${pcfiledir}/../..
+exec_prefix=${prefix}
+libdir=${prefix}/lib
+includedir=${prefix}/include
+
+Name: libavcodec
+Description: FFmpeg codec library
+Version: 63.1.102
+Conflicts:
+
+Libs: "-L${libdir}" -lavcodec "-L${prefix}/lib/pkgconfig/../../lib" -lvpx -lm -lpthread "-L${prefix}/lib/pkgconfig/../../lib" -lvpx -lm -lpthread "-L${prefix}/lib/pkgconfig/../../lib" -lvpx -lm -lpthread "-L${prefix}/lib/pkgconfig/../../lib" -lvpx -lm -lpthread -liconv -lm -llzma "-L${prefix}/lib/pkgconfig/../../lib" -ldav1d "-L${prefix}/lib/pkgconfig/../../lib" -lsnappy -lc++ -framework AudioToolbox -lilbc -pthread "-L${prefix}/lib/pkgconfig/../../lib" -lopenjp2 -lm "-L${prefix}/lib/pkgconfig/../../lib" -lopus -lm "-L${prefix}/lib/pkgconfig/../../lib" -lspeex -pthread "-L${prefix}/lib/pkgconfig/../../lib" -lz -framework VideoToolbox -framework CoreFoundation -framework CoreMedia -framework CoreVideo -framework CoreServices
+Requires: libswresample >= 7.1.102, libavutil >= 61.1.102 
+Cflags: "-I${includedir}"

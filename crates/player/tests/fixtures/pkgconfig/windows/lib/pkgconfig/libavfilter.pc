@@ -1,0 +1,13 @@
+prefix=${pcfiledir}/../..
+exec_prefix=${prefix}
+libdir=${prefix}/lib
+includedir=${prefix}/include
+
+Name: libavfilter
+Description: FFmpeg audio/video filtering library
+Version: 12.1.102
+Conflicts:
+
+Libs: "-L${libdir}" -lavfilter "-L${prefix}/lib" -lzs "-L${prefix}/lib" -lharfbuzz -lfreetype -lbz2 -llibpng16 -lzs -lbrotlidec -lbrotlicommon "-L${prefix}/lib" -lfribidi "-L${prefix}/lib" -lass -lgdi32 -lfribidi -lharfbuzz -lfontconfig -lfreetype -lbz2 -llibpng16 -lzs -lbrotlidec -lbrotlicommon -llibexpatMD "-L${prefix}/lib" -lfontconfig -lfreetype -lbz2 -llibpng16 -lzs -lbrotlidec -lbrotlicommon -llibexpatMD "-L${prefix}/lib" -lfreetype -lbz2 -llibpng16 -lzs -lbrotlidec -lbrotlicommon
+Requires: libswscale >= 10.1.102, libavformat >= 63.1.102, libavcodec >= 63.1.102, libswresample >= 7.1.102, libavutil >= 61.1.102 
+Cflags: "-I${includedir}"

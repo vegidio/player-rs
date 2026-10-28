@@ -1,0 +1,11 @@
+prefix=${pcfiledir}/../..
+libdir=${prefix}/lib
+includedir=${prefix}/include
+
+Name: uchardet
+Description: An encoding detector library ported from Mozilla
+Version: 0.0.8
+
+Libs: "-L${libdir}" -luchardet 
+Requires: 
+Cflags: "-I${includedir}/uchardet"

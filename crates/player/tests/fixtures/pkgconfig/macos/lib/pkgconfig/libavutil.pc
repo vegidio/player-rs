@@ -1,0 +1,13 @@
+prefix=${pcfiledir}/../..
+exec_prefix=${prefix}
+libdir=${prefix}/lib
+includedir=${prefix}/include
+
+Name: libavutil
+Description: FFmpeg utility library
+Version: 61.1.102
+Conflicts:
+
+Libs: "-L${libdir}" -lavutil -lm "-L${prefix}/lib/pkgconfig/../../lib" -lz "-L${prefix}/lib/pkgconfig/../../lib" -lssl -lcrypto -framework VideoToolbox -pthread -framework CoreFoundation -framework CoreMedia -framework CoreVideo -framework CoreServices
+Requires:  
+Cflags: "-I${includedir}"

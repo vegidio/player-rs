@@ -1,0 +1,16 @@
+prefix=${pcfiledir}/../..
+includedir=${prefix}/include
+libdir=${prefix}/lib
+
+sysconfdir=${prefix}/etc
+localstatedir=${prefix}/var
+confdir=${prefix}/etc/fonts
+cachedir=${prefix}/var/cache/fontconfig
+
+Name: Fontconfig
+Description: Font configuration and customization library
+Version: 2.17.1
+
+Libs: "-L${libdir}" -lfontconfig -pthread -lm
+Requires: freetype2 >=  21.0.15, expat
+Cflags: "-I${includedir}" -pthread

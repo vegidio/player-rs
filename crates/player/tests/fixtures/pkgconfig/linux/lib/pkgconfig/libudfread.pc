@@ -1,0 +1,10 @@
+prefix=${pcfiledir}/../..
+includedir=${prefix}/include
+libdir=${prefix}/lib
+
+Name: libudfread
+Description: UDF filesystem access library
+Version: 1.2.0
+
+Libs: "-L${libdir}" -ludfread -pthread
+Cflags: "-I${includedir}" -pthread

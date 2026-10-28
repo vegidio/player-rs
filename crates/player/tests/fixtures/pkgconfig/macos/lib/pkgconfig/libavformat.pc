@@ -1,0 +1,13 @@
+prefix=${pcfiledir}/../..
+exec_prefix=${prefix}
+libdir=${prefix}/lib
+includedir=${prefix}/include
+
+Name: libavformat
+Description: FFmpeg container format library
+Version: 63.1.102
+Conflicts:
+
+Libs: "-L${libdir}" -lavformat -lm "-L${prefix}/lib/pkgconfig/../../lib" -lxml2 -liconv -lm -lz "-L${prefix}/lib/pkgconfig/../../lib" -lbz2 "-L${prefix}/lib/pkgconfig/../../lib" -lz "-L${prefix}/lib/pkgconfig/../../lib" -lssl -lcrypto "-L${prefix}/lib/pkgconfig/../../lib" -lsrt -lc++ -lssl -lcrypto "-L${prefix}/lib/pkgconfig/../../lib" -lssh -lcrypto
+Requires: libavcodec >= 63.1.102, libswresample >= 7.1.102, libavutil >= 61.1.102 
+Cflags: "-I${includedir}"

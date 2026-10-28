@@ -1,0 +1,112 @@
+name: Test
+
+# Builds and tests the workspace across every OS/architecture the `binaries-mpv` release
+# ships: macOS (x64 + arm64), Linux (x64 + arm64), Windows MSVC (x64 + arm64). Each leg
+# downloads the matching static archive in `crates/player/build.rs`, links it, and runs the
+# tests, including the one asserting the linked libmpv matches the committed bindings.
+# `fail-fast: false` so one platform's failure doesn't hide the others.
+#
+# `xtask` is never built here: it only regenerates the bindings and drags in bindgen/libclang.
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+# Be resilient to flaky crates.io downloads on the runners.
+env:
+  CARGO_NET_RETRY: "10"
+  CARGO_TERM_COLOR: always
+  # The Linux archive leaves the display and audio stacks and the Vulkan loader dynamic. These
+  # packages provide their `.pc` files and `.so` links for the closure of `mpv.pc`; `build.rs`
+  # reads the `.pc` files itself, so no `pkg-config` binary is needed.
+  LINUX_DEV_PACKAGES: >-
+    libx11-dev libxext-dev libxfixes-dev libxrandr-dev libxss-dev libxpresent-dev
+    libx11-xcb-dev libxcb-dri3-dev libxkbcommon-dev libwayland-dev wayland-protocols libegl-dev
+    libgbm-dev libdrm-dev
+    libdisplay-info-dev libvdpau-dev libpulse-dev libpipewire-0.3-dev libvulkan-dev
+
+jobs:
+  # fmt and clippy run once on Linux x64 (the lints are platform-independent), keeping the
+  # per-platform matrix focused on building and running. `-D warnings` makes any lint fatal.
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Install Linux dev packages
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ${{ env.LINUX_DEV_PACKAGES }}
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: lint
+
+      - name: Format
+        run: cargo fmt --all --check
+
+      - name: Clippy
+        run: cargo clippy --workspace --exclude xtask --all-targets -- -D warnings
+
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # macOS: Apple-Silicon runner; the x64 leg cross-compiles and runs via Rosetta.
+          - name: macOS arm64
+            runner: macos-latest
+            target: aarch64-apple-darwin
+          - name: macOS x64
+            runner: macos-latest
+            target: x86_64-apple-darwin
+            rosetta: true
+          # Linux: native runners.
+          - name: Linux x64
+            runner: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - name: Linux arm64
+            runner: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          # Windows: stock MSVC targets. The archives ship no DLLs, so nothing is added to PATH.
+          - name: Windows x64
+            runner: windows-latest
+            target: x86_64-pc-windows-msvc
+          - name: Windows arm64
+            runner: windows-11-arm
+            target: aarch64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rosetta 2
+        if: matrix.rosetta
+        run: sudo softwareupdate --install-rosetta --agree-to-license
+
+      - name: Install Linux dev packages
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ${{ env.LINUX_DEV_PACKAGES }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build -p player-rs -p player-gpui --target ${{ matrix.target }} --all-targets
+
+      - name: Test
+        run: cargo test -p player-rs -p player-gpui --target ${{ matrix.target }}

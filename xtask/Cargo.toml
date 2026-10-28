@@ -1,0 +1,11 @@
+[package]
+name = "xtask"
+version = "0.0.0"
+edition.workspace = true
+publish = false
+description = "Dev-only binding generator for player-rs (not published)."
+
+[dependencies]
+bindgen = { version = "0.73", default-features = false, features = ["runtime", "prettyplease"] }
+ureq = "3.5"
+zip = { version = "9", default-features = false, features = ["deflate"] }
