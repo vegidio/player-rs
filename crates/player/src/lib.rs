@@ -100,6 +100,11 @@ mod player;
 mod render;
 mod source;
 
+/// The integration tests' headless GL context, shared with the unit tests that need a real render context.
+#[cfg(test)]
+#[path = "../tests/common/gl.rs"]
+mod test_gl;
+
 pub use builder::{Autoplay, PlayerBuilder, VideoOutput};
 pub use error::{Error, Result};
 pub use event::{EndReason, Event, Events, State};

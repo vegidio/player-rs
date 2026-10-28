@@ -444,9 +444,41 @@ fn load_before_render_context_plays_without_video() {
     }
 
     let (mut render, _frames) = render_context(&gl, &player);
-    let framebuffer = gl.framebuffer(160, 120, [0, 0, 0, 255]);
+    let framebuffer = gl.framebuffer(160, 120, [255, 0, 255, 255]);
     wait_position_past(&events, Duration::from_millis(500));
     assert!(!render.update(), "a frame is announced for media loaded before the render context");
     render.render(target(&framebuffer), false).expect("drawing succeeds");
+    let image = gl.read(&framebuffer);
+    assert!(
+        image.pixels.as_chunks::<4>().0.iter().all(|pixel| is_black(*pixel)),
+        "no video is drawn, so the framebuffer is black, first pixel: {:?}",
+        image.pixel(0, 0)
+    );
     assert_eq!(player.state().video_size, None);
+}
+
+#[test]
+fn audio_only_media_has_no_video_size() {
+    if gl::skipped() {
+        return;
+    }
+    let rig = rig(Autoplay::On);
+    let events = rig.player.subscribe();
+    rig.player.load(Source::url("av://lavfi:sine=frequency=440:duration=30").unwrap()).unwrap();
+
+    // Wait for the media to load and play a little, failing on any video size announced meanwhile.
+    let deadline = Instant::now() + TIMEOUT;
+    let mut loaded = false;
+    loop {
+        let left = deadline.saturating_duration_since(Instant::now());
+        match events.recv_timeout(left) {
+            Some(Event::Loaded) => loaded = true,
+            Some(Event::PositionChanged(Some(position))) if loaded && position > Duration::from_millis(300) => break,
+            Some(Event::VideoSizeChanged(size)) => panic!("audio-only media announced a video size: {size:?}"),
+            Some(Event::Ended(reason)) => panic!("the media ended: {reason:?}"),
+            Some(_) => {}
+            None => panic!("timed out waiting for the audio to play"),
+        }
+    }
+    assert_eq!(rig.player.state().video_size, None);
 }

@@ -157,6 +157,8 @@ impl Drop for ActiveFlag {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_gl::{self as gl, Gl};
+    use std::any::Any;
 
     fn player(video_output: VideoOutput) -> Player {
         Player::builder().video_output(video_output).mpv_option("ao", "null").build().unwrap()
@@ -205,6 +207,39 @@ mod tests {
             assert!(matches!(result, Err(Error::Render(_))), "{width}x{height} was accepted");
         }
         assert_eq!(check_target(RenderTarget { fbo: 3, width: 160, height: 120 }).unwrap(), (3, 160, 120));
+    }
+
+    /// Drops the player and its render context in either order, and checks that the mpv instance is released with
+    /// the last of them, and not before.
+    #[test]
+    fn instance_is_released_with_its_last_owner() {
+        if gl::skipped() {
+            return;
+        }
+        let gl = Gl::new();
+        for player_first in [true, false] {
+            let player = player(VideoOutput::Render);
+            let instance = Arc::downgrade(player.handle());
+            // SAFETY: `gl` is current on this thread, where the render context is dropped, and outlives it.
+            let render = unsafe { RenderContext::new(&player, gl.loader(), || {}) }.unwrap();
+
+            let (first, second): (Box<dyn Any>, Box<dyn Any>) = if player_first {
+                (Box::new(player), Box::new(render))
+            } else {
+                (Box::new(render), Box::new(player))
+            };
+            drop(first);
+            assert!(
+                instance.strong_count() > 0,
+                "the instance outlives the first drop (player first: {player_first})"
+            );
+            drop(second);
+            assert_eq!(
+                instance.strong_count(),
+                0,
+                "the instance is released by the second drop (player first: {player_first})"
+            );
+        }
     }
 
     #[test]

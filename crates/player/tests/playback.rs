@@ -266,7 +266,9 @@ fn control_with_no_media() {
 fn play_to_the_end_then_play_again() {
     let player = player(Autoplay::On);
     let events = player.subscribe();
-    load(&player, &events);
+    // Restarting seeks back to the start, which the generated source cannot do.
+    let (_dir, wav) = wav_source();
+    load_source(&player, &events, wav);
 
     // Media plays until its end, then stays loaded and paused there, as in Video.js.
     wait_for(&events, "the end of the media", |e| *e == Event::Ended(EndReason::Eof));
