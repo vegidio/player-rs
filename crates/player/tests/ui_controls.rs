@@ -150,11 +150,14 @@ fn play_pause_hotkey() {
 fn fullscreen_and_mute_hotkeys() {
     let mut h = Harness::new(Autoplay::Off, options());
     h.load_wav(2);
-    let before = h.player.state();
+    // The playback fields only: the buffered position keeps changing on its own as the cache fills.
+    let playback = |s: State| (s.idle, s.position, s.paused, s.volume, s.muted, s.rate, s.ended);
+    let before = playback(h.player.state());
 
     let outcome = h.key(Key::Char('f'), Focus::Player);
     assert_eq!(outcome, ui::KeyOutcome { handled: true, request: Some(Request::ToggleFullscreen) });
-    assert_eq!(h.player.state(), before, "fullscreen is the frontend's");
+    h.drain();
+    assert_eq!(playback(h.player.state()), before, "fullscreen is the frontend's");
 
     assert!(h.key(Key::Char('m'), Focus::Player).handled);
     h.wait("the player to mute", |s, _| s.muted);
