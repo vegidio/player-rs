@@ -1,7 +1,7 @@
 ## 1. Test GL infrastructure (spike first)
 
 - [x] 1.1 Add `glutin` 0.32 and `glow` 0.16 (and `windows-sys` for a hidden window on Windows) to `[dev-dependencies]` and write `tests/common/gl.rs`: a headless GL context (CGL with Apple's software renderer on macOS, EGL device/surfaceless on Linux, WGL on a hidden window on Windows) made current on the test thread, a `get_proc_address` loader, and an offscreen RGBA texture + FBO with pixel readback; verify a `tests/gl_smoke.rs` test that clears the FBO to a colour and reads it back passes locally on macOS, and `cargo package -p player-rs --list` still succeeds
-- [ ] 1.2 Update `.github/workflows/test.yml` with software OpenGL per leg (Linux: `libegl1 libegl-mesa0 libgl1-mesa-dri` + `LIBGL_ALWAYS_SOFTWARE=1`; Windows: pinned `pal1000/mesa-dist-win` `opengl32.dll`/`libgallium_wgl.dll` copied next to the test binaries; macOS: nothing); with the user's approval push a branch and run the workflow; verify `gl_smoke` passes on all six legs, or record the leg that cannot and apply the fallback from design.md (raw FFI helper, x64 DLLs under emulation, or a documented skip)
+- [x] 1.2 Update `.github/workflows/test.yml` with software OpenGL per leg (Linux: `libegl1 libegl-mesa0 libgl1-mesa-dri` + `LIBGL_ALWAYS_SOFTWARE=1`; Windows: pinned `pal1000/mesa-dist-win` `opengl32.dll`/`libgallium_wgl.dll` copied next to the test binaries; macOS: nothing); with the user's approval push a branch and run the workflow; verify `gl_smoke` passes on all six legs, or record the leg that cannot and apply the fallback from design.md (raw FFI helper, x64 DLLs under emulation, or a documented skip)
 
 ## 2. crates/player - render API
 
@@ -20,4 +20,4 @@
 
 - [x] 4.1 Document the render API in crate docs and on `RenderContext` (the `unsafe` contract, the threading table, `on_frame` must only signal, create the context before the first `load`, a `no_run` glow-style example), and update `README.md` (render status, platforms, CI software GL); verify `cargo doc -p player-rs --no-deps` builds without warnings
 - [x] 4.2 Run `cargo fmt --check`, `cargo clippy --workspace --exclude xtask --all-targets -- -D warnings` and `cargo test --workspace --exclude xtask` locally on macOS, and confirm `cargo package -p player-rs --list` succeeds with the new dev-dependencies; verify all pass
-- [ ] 4.3 With the user's approval, push and trigger the manual `test` workflow; verify the lint job and all six legs (macOS arm64/x64, Linux x64/arm64, Windows x64/arm64) pass `tests/render.rs`, and that any leg skipped per task 1.2 is recorded as a gap in the README and design.md
+- [x] 4.3 With the user's approval, push and trigger the manual `test` workflow; verify the lint job and all six legs (macOS arm64/x64, Linux x64/arm64, Windows x64/arm64) pass `tests/render.rs`, and that any leg skipped per task 1.2 is recorded as a gap in the README and design.md
