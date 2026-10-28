@@ -1,0 +1,45 @@
+//! Plays a local file or a URL without a window (audio only), printing the player's events until the media ends.
+//!
+//! ```sh
+//! cargo run -p player-rs --example play -- path/to/movie.mp4
+//! cargo run -p player-rs --example play -- https://example.com/movie.mp4
+//! ```
+
+use player::prelude::*;
+use std::process::ExitCode;
+
+fn main() -> Result<ExitCode> {
+    let Some(arg) = std::env::args().nth(1) else {
+        eprintln!("usage: play <path or URL>");
+        return Ok(ExitCode::from(2));
+    };
+    let source = if arg.contains("://") { Source::url(&arg)? } else { Source::file(&arg)? };
+
+    let player = Player::builder().autoplay(Autoplay::On).build()?;
+    let events = player.subscribe();
+    player.load(source)?;
+
+    // Position changes arrive several times per second; print each whole second once.
+    let mut last_second = None;
+    for event in events {
+        match event {
+            Event::PositionChanged(position) => {
+                let second = position.map(|position| position.as_secs());
+                if second != last_second {
+                    last_second = second;
+                    println!("position: {}s", second.unwrap_or_default());
+                }
+            }
+            Event::Ended(EndReason::Error(message)) => {
+                eprintln!("error: {message}");
+                return Ok(ExitCode::FAILURE);
+            }
+            Event::Ended(reason) => {
+                println!("ended: {reason:?}");
+                break;
+            }
+            event => println!("{event:?}"),
+        }
+    }
+    Ok(ExitCode::SUCCESS)
+}

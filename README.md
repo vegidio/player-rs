@@ -4,23 +4,61 @@ A fast, user-friendly video player for Rust, built on [libmpv](https://mpv.io). 
 
 libmpv and everything it depends on (FFmpeg, libplacebo, libass, …) are linked **statically** from the prebuilt archives of [vegidio/binaries-mpv](https://github.com/vegidio/binaries-mpv). Programs built with `player-rs` need neither mpv nor FFmpeg installed.
 
-> **Status:** early. The workspace builds and links libmpv on every supported platform; the playback API and the GPUI player come in later changes.
+> **Status:** early. `player-rs` plays media headless (audio, no video output yet) on every supported platform; rendering video and the GPUI player come in later changes.
 
 ## Workspace
 
-| Path            | Package       | Library       | Purpose                                                                                      |
-|-----------------|---------------|---------------|----------------------------------------------------------------------------------------------|
-| `crates/player` | `player-rs`   | `player`      | Core crate: downloads and links libmpv, raw FFI bindings (`player::sys`), the safe API. No GUI dependency. |
+| Path            | Package       | Library       | Purpose                                                                                                       |
+|-----------------|---------------|---------------|---------------------------------------------------------------------------------------------------------------|
+| `crates/player` | `player-rs`   | `player`      | Core crate: downloads and links libmpv, raw FFI bindings (`player::sys`), the safe API. No GUI dependency.    |
 | `crates/gpui`   | `player-gpui` | `player_gpui` | The player UI for [GPUI](https://gpui.rs) apps (placeholder for now). Goes through `player-rs`, never libmpv. |
-| `xtask`         | `xtask`       | -             | Dev-only tooling (not published): regenerates the FFI bindings.                              |
+| `xtask`         | `xtask`       | -             | Dev-only tooling (not published): regenerates the FFI bindings.                                               |
+
+## Usage
+
+```rust
+use player::prelude::*;
+
+fn main() -> player::Result<()> {
+    let player = Player::builder().autoplay(Autoplay::On).volume(0.8).build()?;
+    let events = player.subscribe();
+    player.load(Source::file("movie.mp4")?)?;
+
+    for event in events {
+        match event {
+            Event::Loaded => println!("duration: {:?}", player.state().duration),
+            Event::Ended(reason) => {
+                println!("ended: {reason:?}");
+                break;
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+```
+
+`Player` is a cheap, cloneable handle usable from any thread. It loads media (`Source::url`, `Source::file`), controls playback (`play`, `pause`, `toggle_pause`, `stop`, `seek`, `set_volume`, `set_muted`, `set_rate`), keeps a `state()` snapshot, and sends `Event`s to any number of subscribers, which can block on them or await them in any async executor. Anything mpv offers that has no typed method yet is reachable through `get_property`, `set_property` and `command`.
+
+Behaviour follows [Video.js](https://videojs.org) where the two differ:
+
+- **End of media:** media that plays to its end stays loaded and paused there (mpv's `keep-open=yes`) and reports `Event::Ended(EndReason::Eof)`; `play()` then restarts it from the beginning. To get mpv's default instead (unload at the end), build with `.mpv_option("keep-open", "no")`.
+- **Autoplay** (`Off`, `On`, `Muted`) applies to every `load`.
+- **Volume** is `0.0..=1.0`. The builder rejects other values; the runtime setters clamp them, as does the playback rate (`0.01..=100.0`).
+
+Play a file or URL from the command line:
+
+```sh
+cargo run -p player-rs --example play -- path/to/movie.mp4
+```
 
 ## Supported platforms
 
-| OS                  | x64 | arm64 |
-|---------------------|-----|-------|
-| macOS               | ✓   | ✓     |
-| Linux (glibc)       | ✓   | ✓     |
-| Windows (MSVC)      | ✓   | ✓     |
+| OS             | x64 | arm64 |
+|----------------|-----|-------|
+| macOS          | ✓  | ✓    |
+| Linux (glibc)  | ✓  | ✓    |
+| Windows (MSVC) | ✓  | ✓    |
 
 Windows GNU/MinGW targets and other architectures are not supported; the build fails with an error naming the unsupported OS, architecture or environment.
 
@@ -32,7 +70,10 @@ Requirements: a stable Rust toolchain (edition 2024) and network access on the f
 cargo build
 cargo test --workspace --exclude xtask
 cargo run -p player-rs --example version
+cargo run -p player-rs --example play -- path/to/movie.mp4
 ```
+
+The tests need no media files, display or sound device: they play media mpv generates itself (`av://lavfi:testsrc`) or WAV files they write to a temporary directory, with mpv's null audio output.
 
 On the first build `crates/player/build.rs` downloads the `binaries-mpv` release pinned in [`crates/player/mpv-version.txt`](crates/player/mpv-version.txt) for the target (35-70 MB) and caches it in Cargo's `OUT_DIR`; later builds reuse it. The link line is derived from the archive's own `lib/pkgconfig/*.pc` files, so no `pkg-config` binary is needed.
 
