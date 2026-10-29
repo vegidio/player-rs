@@ -20,6 +20,48 @@ What was verified for this design:
 
 Required behaviour is in `specs/video-surface` and the `playback-core` delta. This document covers how.
 
+## Spike outcome (task 1.1)
+
+Run locally on 2026-10-29 on a hybrid desktop: NVIDIA GeForce RTX 5090 (driver 616.92) and AMD Radeon integrated graphics (32.0.11024.2). The WGL context lands on the NVIDIA ICD (`GL_VENDOR` "NVIDIA Corporation", 3.2 core through `wglCreateContextAttribsARB`). DXGI lists the RTX 5090 as adapter 0, then the AMD iGPU, then the Microsoft Basic Render Driver (WARP).
+
+| Question | Outcome |
+|---|---|
+| `WGL_NV_DX_interop2` on the GPU driver | Present (also `WGL_NV_DX_interop`, `WGL_NVX_DX_interop`). |
+| Registering a `MISC_SHARED_NTHANDLE` texture | **Rejected by NVIDIA**: `wglDXRegisterObjectNV` fails with `0xC007006E` (or `E_HANDLE` once the GL name is bound), also with `KEYEDMUTEX \| NTHANDLE`. Unshared, `MISC_SHARED` and `MISC_SHARED_KEYEDMUTEX` textures register. This changed decisions 2 and 5 (below): mpv renders into an unshared interop texture, and a GPU `CopyResource` moves each frame into the NT-handle slot. |
+| NT handle outliving its device | Yes. After the GL context, interop device, D3D11 device and textures are all released, the NT handle opens on a new device with `OpenSharedResource1` and holds the copied pixels. |
+| Orientation | Upright with `flip_y = false`: the test pattern's gradient is in rows 92-104 (85 colours per row) and not in the mirrored rows (8). |
+| Channel order | Correct. Solid fields read back from the D3D11 texture as B,G,R,A = red `[0,0,254,255]`, green `[1,255,0,255]`, blue `[255,0,0,255]`, white, grey `[128,128,128,255]`. |
+| `GL_VENDOR` vs adapter | `wglDXOpenDeviceNV` succeeds on the NVIDIA device and **fails** on the AMD iGPU's and WARP's D3D11 devices. A GL/D3D mismatch therefore shows up as an open failure; the `GL_VENDOR`/`VendorId` comparison stays as a second guard for drivers that open anyway. |
+| `hwdec-current` with `tests/fixtures/testsrc-h264.mp4` | `auto-safe` → `nvdec`; `auto` → `nvdec`; `nvdec` → `nvdec`; `dxva2` → `no`; `d3d11va` → `no` (no GL interop without ANGLE); `nvdec-copy`/`d3d11va-copy` → themselves. `auto-safe` picks the non-copy `nvdec` and is kept as the default (decision 6). With this libmpv no zero-copy GL interop exists for AMD or Intel, so `auto-safe` decodes in software there. |
+| CI: Mesa 26.2.4 (mesa-dist-win) | **No interop.** The WGL extension string compiled into `libgallium_wgl.dll`, shared by every gallium driver (llvmpipe and `d3d12` on WARP alike), lists no `WGL_NV_DX_interop*`, and neither DLL contains `wglDXOpenDeviceNV`. Checked statically in the DLLs; with the user's agreement no CI run was made for the spike. On CI, the x64 leg runs only the "driver without Direct3D sharing" scenario and the builder tests, and the full Windows section runs locally (decision 12, agreed by the user). |
+
+## Manual verification (task 4.1)
+
+On an NVIDIA GeForce RTX 5090 with driver 616.92 (Windows 11, with an AMD iGPU alongside), in a release build, a 10 s 3840x2160 30 fps HEVC Main clip (FFmpeg `testsrc2`, NVENC, 20 Mb/s), through a temporary test that read the file from `PLAYER_TEST_4K` and was then deleted:
+
+| Check | Result |
+|---|---|
+| `hwdec-current` | `nvdec`, not a copy decoder |
+| Frames published | 3840x2160 at 30.6 fps over 6 s, the video's rate |
+| CPU | 7.6% of one core (of 32), measured with the process's processor time |
+| Drop while playing | 66 ms |
+
+AMD and Intel GPUs are unverified; the README says so.
+
+## CI run (task 3.2)
+
+Run [40876249747](https://github.com/vegidio/player-rs/actions/runs/40876249747) on `add-player-6-windows-surface`, commit `ef536d6`. Attempt 1 failed only in `player-gpui`'s `controls::tests::seek_bar_arrow_keys` on Linux x64: it timed out waiting 5 s for a seek, in a crate and on a platform this change does not touch. Attempt 2 passed every job:
+
+| Leg | Passed | Failed | Ignored | Notes |
+|---|---|---|---|---|
+| Lint | - | - | - | fmt and clippy with `-D warnings` |
+| macOS x64 | 243 | 0 | 4 | |
+| macOS arm64 | 243 | 0 | 4 | all 21 macOS surface tests, after the move to `crate::surface` |
+| Linux x64 | 205 | 0 | 4 | |
+| Linux arm64 | 205 | 0 | 4 | |
+| Windows x64 | 241 | 0 | 4 | 27 Windows surface tests on Mesa: `driver_without_direct3d_sharing` checks the error, the rest skip |
+| Windows arm64 | 241 | 0 | 4 | GL tests skipped (`PLAYER_TEST_SKIP_GL`) |
+
 ## Slices
 
 The `add-player` series. **This change is slice 6.**
@@ -98,20 +140,25 @@ loop:  wait on Condvar<Signals { mpv_frame, size, shutdown }>
        shutdown -> break
        render.update()
        no size or zero size -> continue
-       size changed -> rebuild the ring for the new size
+       size changed -> rebuild the target and the ring for the new size
        slot = ring[next]                              // 3 slots, round-robin
-       wglDXLockObjectsNV(slot.interop)
-       render.render({fbo: slot.fbo, w, h}, flip_y = false)
-       wglDXUnlockObjectsNV(slot.interop)             // GL work is ordered before later D3D11 work
+       wglDXLockObjectsNV(target.interop)
+       render.render({fbo: target.fbo, w, h}, flip_y = false)
+       wglDXUnlockObjectsNV(target.interop)           // GL work is ordered before later D3D11 work
+       context.CopyResource(slot.texture, target.texture)   // on the GPU
        context.End(event_query); context.Flush(); spin GetData(event_query) with yield, 1 s bound
        latest.lock() = Some(Frame { slot.handle.clone(), .., seq += 1 })
        render.report_swap(); on_frame()
-exit:  drop RenderContext (GL current) -> unregister interop objects -> wglDXCloseDeviceNV
+exit:  drop RenderContext (GL current) -> unregister the interop object -> wglDXCloseDeviceNV
        -> delete GL objects -> wglMakeCurrent(null) -> wglDeleteContext -> DestroyWindow
 ```
 
-- **This is the macOS loop, unchanged** except for the lock/unlock pair and the completion wait. The signals, the bounded join on drop, and `report_swap` after publication carry over, with the same reasons as slice 4.
-- **Orientation.** D3D11 row 0 is the top. GL writes row 0 at the texture origin, which through the interop maps to D3D row 0. So `flip_y = false` should give an upright D3D picture, as with IOSurface. Task 1.1 checks this, because the interop's row mapping is driver-defined in practice.
+- **This is the macOS loop, unchanged** except for the lock/unlock pair, the GPU copy and the completion wait. The signals, the bounded join on drop, and `report_swap` after publication carry over, with the same reasons as slice 4.
+- **Render threads are pooled and never exit.** After `exit`, the thread returns to a process-wide pool, and the next renderer to be built takes it before a new thread is spawned. Drop still waits until the teardown above is done.
+  - Why: WinDbg showed that when a thread that used a context exits, NVIDIA's GL driver (`nvoglv64`, on DLL_THREAD_DETACH) holds the loader lock while polling for one of its own threads to exit. That thread needs the loader lock to exit, so the process deadlocks. It hung about 1 in 3 parallel test runs with NVDEC players, and never in 15 runs with pooling.
+  - Cost: idle threads stay parked until the process exits, at most as many as were ever alive at once.
+  - A process-wide lock over creation, drawing and teardown also avoided the hang, but serialised every renderer.
+- **Orientation.** D3D11 row 0 is the top. GL writes row 0 at the texture origin, which through the interop maps to D3D row 0. So `flip_y = false` gives an upright D3D picture, as with IOSurface; task 1.1 confirmed it on NVIDIA.
 - **The hidden window** exists only because WGL needs a device context with a pixel format. It is a message-only-style `WS_POPUP` window on the render thread, never shown, with a class registered once per process.
 - **The WGL context** is created with `wglCreateContextAttribsARB` at 3.2 core when available, else a legacy context. mpv accepts either. The loader is `wglGetProcAddress` with a fallback to `GetProcAddress(opengl32)` for the GL 1.1 entry points, which `wglGetProcAddress` does not return.
 
@@ -136,11 +183,11 @@ The ring of 3 together with "publish only completed frames" gives the spec's "un
 ### 5. Shared textures and the interop
 
 - **Textures.** Each slot is a `D3D11_TEXTURE2D_DESC` with `B8G8R8A8_UNORM`, `BIND_RENDER_TARGET | BIND_SHADER_RESOURCE` and `MISC_SHARED | MISC_SHARED_NTHANDLE`. Its handle comes from `IDXGIResource1::CreateSharedHandle` (`GENERIC_ALL`) and is wrapped in a std `OwnedHandle` inside an `Arc` shared with every `Frame` of that slot.
-  - An open NT handle keeps the resource alive, so a frame outlives a ring rebuild and the renderer (spec).
-  - Task 2.3 confirms this with the "handle outlives renderer" scenario.
-- **Interop.** `wglDXRegisterObjectNV(device, texture, gl_tex, GL_TEXTURE_2D, WGL_ACCESS_WRITE_DISCARD_NV)` registers each slot's texture, and the GL texture is attached to the slot's FBO. mpv renders into that FBO like any other.
-  - The GL view of a `B8G8R8A8` texture is an RGBA8 texture whose channels the interop swizzles, so mpv's RGBA output lands as BGRA in D3D. Task 1.1 checks that colours are not swapped.
-- **The ring is rebuilt on a size change**, like macOS: unregister, release, create, register.
+  - An open NT handle keeps the resource alive, so a frame outlives a ring rebuild and the renderer (spec). Task 1.1 confirmed it; task 2.3 tests it.
+- **The interop target.** NVIDIA's interop refuses NT-handle textures (task 1.1), so mpv does not draw into the slots. It draws into one more texture of the same size and format with no sharing flags, the target, registered with `wglDXRegisterObjectNV(device, texture, gl_tex, GL_TEXTURE_2D, WGL_ACCESS_WRITE_DISCARD_NV)` and attached to the target's FBO. After the unlock, `CopyResource` copies it into the slot on the GPU.
+  - The copy is one GPU blit per frame, about 33 MB at 4K, ordered after the GL work by the unlock and before publication by the completion wait. No frame passes through the CPU.
+  - The GL view of a `B8G8R8A8` texture is an RGBA8 texture whose channels the interop swizzles, so mpv's RGBA output lands as BGRA in D3D. Task 1.1 confirmed that colours are not swapped.
+- **The ring is rebuilt on a size change**, like macOS: unregister and release the target, release the slots, then create both again.
 
 ### 6. Hardware decoding default: `auto-safe`, confirmed by the spike
 
@@ -192,6 +239,7 @@ Everything WGL-, D3D- and libmpv-specific is in `crates/player` behind `cfg(wind
 - **Threads.** These are the same as on macOS:
   - mpv's threads only set a flag and notify.
   - The render thread owns every GL, D3D11 and interop object.
+  - Unlike macOS, render threads come from a pool and never exit (decision 2).
   - `set_size` and `latest` take a mutex held only for a field swap.
 - **Lifetimes.**
   - `SurfaceRenderer` → the render thread → `RenderContext` → `Arc<Handle>`, so mpv outlives the renderer in either drop order (slice 2).
@@ -200,7 +248,7 @@ Everything WGL-, D3D- and libmpv-specific is in `crates/player` behind `cfg(wind
 
 ### 11. Zero-copy
 
-- **Hardware path:** an interop hwdec (`nvdec` or `dxva2`) hands decoded surfaces to GL. mpv scales and converts on the GPU into the slot's FBO, which is the D3D11 texture itself through the interop. The consumer samples the same memory.
+- **Hardware path:** an interop hwdec (`nvdec`, as task 1.1 found) hands decoded surfaces to GL. mpv scales and converts on the GPU into the target's FBO, which is a D3D11 texture through the interop, and D3D11 copies it into the slot on the GPU (decision 5). The consumer samples the slot's memory.
 - **Software decoding** uploads inside mpv, as noted in slices 2 and 4. That is mpv's normal path, not a copy this crate adds.
 - **CPU readback** happens only in tests. They copy to a `D3D11_USAGE_STAGING` texture on a second device opened from the handle, then `Map` it. That also exercises the consumer path.
 
@@ -208,19 +256,21 @@ Everything WGL-, D3D- and libmpv-specific is in `crates/player` behind `cfg(wind
 
 - **`tests/surface.rs`** gains a `cfg(windows)` section with the same scenarios as macOS: creation errors, no frames without a size, sizes, resize while paused, black with nothing loaded, the upright test pattern, solid colours, letterboxing, created after load, audio-less reload, both drop orders, a frame and its handle outliving the renderer, no `on_frame` after drop, and opening on another device. Scenarios that are BGRA/NV12-specific or about `GlRenderer` stay macOS-only.
 - **Hardware decoding.** `PLAYER_TEST_GL=hardware` enables the hwdec test, which asserts that `hwdec-current` is set and has no `-copy` suffix. It runs locally on a GPU, as on macOS.
-- **CI: settled by the spike (task 1.1).** As far as known, Mesa's llvmpipe `opengl32.dll` has no `WGL_NV_DX_interop2`. The spike checks llvmpipe, then Mesa's `d3d12` gallium driver on WARP (`GALLIUM_DRIVER=d3d12`, shipped in mesa-dist-win), which runs on D3D12 and may expose the extension.
-  - If one of them works, the Windows x64 leg runs the whole Windows section on it.
-  - If neither does, the x64 leg runs only the "driver without Direct3D sharing" scenario plus the builder tests, the full section runs locally, and the gap is recorded here and in the README. That choice goes back to the user before task 3.1.
-  - Windows arm64 keeps slice 2's GL skip either way.
+- **CI: settled by the spike (task 1.1).** Neither Mesa driver has the interop: Mesa's WGL layer, shared by llvmpipe and `d3d12` on WARP, exposes no `WGL_NV_DX_interop*`.
+  - So the Windows x64 leg runs only the "driver without Direct3D sharing" scenario plus the builder tests. The full Windows section runs locally on a GPU, and the gap is recorded here and in the README. The user agreed to this gap.
+  - The scenarios needing the interop detect the missing extension and return early, as `PLAYER_TEST_SKIP_GL` does, so `cargo test` stays green on CI.
+  - Windows arm64 keeps slice 2's GL skip.
 
 ## Risks / Trade-offs
 
-- [Mesa offers no interop on CI, so the main path is tested only locally] → Task 1.1 tries the `d3d12` driver on WARP first. If that fails, the user decides, and the gap is documented (decision 12). A test-only CPU fallback is deliberately not added, because it would test a path that never ships.
+- [Mesa offers no interop on CI, so the main path is tested only locally] → Confirmed by task 1.1, for llvmpipe and `d3d12` alike. The user accepted the gap, and it is documented (decision 12). A test-only CPU fallback is deliberately not added, because it would test a path that never ships.
+- [NVIDIA's interop refuses NT-handle textures] → Found by task 1.1. mpv renders into an unshared interop texture that is copied into the shared slot on the GPU (decision 5), at the cost of one GPU blit per frame. The user chose this over legacy shared handles, which would keep the blit out but cannot be opened on D3D12 and need a COM reference to keep the texture alive.
 - [Hybrid-GPU laptops: GL on one GPU, GPUI on another] → Detected and reported as `Error::Render` (decision 4), with the docs explaining how to steer the app to one GPU. Precise matching is deferred. Untested beyond the hardware available locally.
 - [Driver bugs in `WGL_NV_DX_interop2` with D3D11 (historically on some AMD and Intel drivers)] → Manual verification (task 4.1) on whatever GPUs are available. Others are listed as unverified in the README. A failing driver produces black frames, never a crash, because creation errors are surfaced.
 - [`auto-safe` picks a copy-back decoder, or none, on some GPUs] → Task 1.1 measures it, and the default can become an explicit list (decision 6).
 - [The interop's row order or channel order differs from what is assumed] → Task 1.1 checks both on real hardware. A flip or swizzle would be a fixed render parameter, not a CPU copy.
 - [An `OwnedHandle` keeps a texture alive after the D3D11 device is released, contrary to expectation] → The "handle outlives renderer" test catches it. If needed, `Frame` also holds an `Arc` to the device.
+- [NVIDIA's GL driver deadlocks under the loader lock when a thread that used a context exits] → Found with WinDbg during tasks 2.4 and 2.7. Render threads are pooled and never exit (decision 2). Threads mpv itself creates and ends are outside this crate's control. The parallel test runs did not catch any of them in the cycle.
 - [8-bit SDR only] → GPUI's swap chain is `B8G8R8A8_UNORM`. mpv tone-maps HDR to SDR, as on macOS.
 
 ## Migration Plan

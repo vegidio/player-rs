@@ -4,7 +4,7 @@ A fast, user-friendly video player for Rust, built on [libmpv](https://mpv.io). 
 
 libmpv and everything it depends on (FFmpeg, libplacebo, libass, …) are linked **statically** from the prebuilt archives of [vegidio/binaries-mpv](https://github.com/vegidio/binaries-mpv). Programs built with `player-rs` need neither mpv nor FFmpeg installed.
 
-> **Status:** early. `player-rs` plays media and draws its video into an OpenGL framebuffer the application provides, on every supported platform (rendering on Windows arm64 is not verified by CI, see [Building](#building)). On macOS it also renders into IOSurfaces that Metal toolkits can show without a copy. `player-gpui` shows the video in a GPUI window with Video.js's controls, from the toolkit-agnostic `player::ui` layer. Video in GPUI on Windows and Linux, and the Video.js menus, captions and poster, come in later changes.
+> **Status:** early. `player-rs` plays media and draws its video into an OpenGL framebuffer the application provides, on every supported platform (rendering on Windows arm64 is not verified by CI, see [Building](#building)). On macOS it also renders into IOSurfaces that Metal toolkits can show without a copy, and on Windows into Direct3D 11 textures shared through NT handles. `player-gpui` shows the video in a GPUI window with Video.js's controls, from the toolkit-agnostic `player::ui` layer. Video in GPUI on Windows (the next change) and Linux, and the Video.js menus, captions and poster, come in later changes.
 
 ## Workspace
 
@@ -78,6 +78,26 @@ renderer.set_size(width_px, height_px);
 
 Media loaded before the surface renderer exists still shows its video. NV12 halves chroma resolution at screen size and, like BGRA, is 8-bit SDR (mpv tone-maps HDR). A Mac without a GPU (a virtual machine) falls back to Apple's software OpenGL renderer, where the player is switched to bilinear scaling.
 
+On Windows, `player::windows::SurfaceRenderer` serves toolkits that draw with Direct3D. It has its own render thread, offscreen OpenGL context and Direct3D 11 device. mpv draws through `WGL_NV_DX_interop2` into a Direct3D texture, which is copied on the GPU into a small ring of BGRA textures, and each frame is published, once the GPU has finished it, as an NT handle the toolkit opens on its own device (`ID3D11Device1::OpenSharedResource1`). There is no `unsafe` code and no copy through the CPU:
+
+```rust,ignore
+let renderer = SurfaceRenderer::builder(&player).on_frame(|| request_repaint()).build()?;
+renderer.set_size(width_px, height_px);
+// When painting: renderer.latest() -> Option<Frame>, with frame.shared_handle() and frame.adapter()
+```
+
+- **Take `latest()` on every paint.** A frame stays unchanged only until two newer ones are published, and its texture lives as long as the frame or a handle opened from it.
+- **Hardware decoding** defaults to mpv's `hwdec=auto-safe` for `VideoOutput::Render` players on Windows, which uses NVDEC on NVIDIA without copying frames; `mpv_option("hwdec", ...)` overrides it.
+- **Adapters.** The renderer uses the first adapter that supports Direct3D 11, the one GPUI picks, or one chosen by its LUID; the toolkit's device must be on the same adapter (`frame.adapter()`).
+- **Hybrid GPUs.** On laptops with two GPUs, OpenGL can run on another GPU than the Direct3D adapter, and building the renderer fails. Steer the app to one GPU by exporting `NvOptimusEnablement` and `AmdPowerXpressRequestHighPerformance` from the executable, or by choosing its GPU in Windows' graphics settings.
+- **Drivers.** The OpenGL driver must have `WGL_NV_DX_interop2`, as NVIDIA's, AMD's and Intel's do; Mesa's software OpenGL does not. Verified on NVIDIA (GeForce RTX 5090); AMD and Intel are unverified, and with the bundled libmpv they decode in software, as no zero-copy OpenGL interop decoder exists for them.
+
+| OS      | Surface renderer                   | Frames                                                | Hardware decoding default     |
+|---------|------------------------------------|-------------------------------------------------------|-------------------------------|
+| macOS   | `player::macos::SurfaceRenderer`   | IOSurface-backed `CVPixelBuffer`, BGRA or NV12        | VideoToolbox                  |
+| Windows | `player::windows::SurfaceRenderer` | Direct3D 11 texture shared through an NT handle, BGRA | `auto-safe` (NVDEC on NVIDIA) |
+| Linux   | none yet                           | -                                                     | -                             |
+
 ### GPUI
 
 `player-gpui` adds the `VideoPlayer` element, a video player with [Video.js](https://videojs.org)'s controls, to apps built with [GPUI-Kit](https://gpui-kit.com) **0.8.1** or a later 0.8 (the app must use the same `gpui-kit` minor version). The app calls `gpui_kit::init(cx)`, which the controls' tooltips and spinner need, and registers `player_gpui::Assets`, which serves the controls' icons and falls back to GPUI-Kit's default icons. An app with an asset source of its own composes `player_gpui::Icons`, the player's extra icons alone, into it instead.
@@ -116,7 +136,7 @@ fn main() {
 }
 ```
 
-- **Video** is shown upright and letterboxed on black, at the element's size in device pixels. It repaints for each new frame and not while paused. Video is shown on **macOS only** for now; on Windows and Linux the element is black while audio plays and the controls work.
+- **Video** is shown upright and letterboxed on black, at the element's size in device pixels. It repaints for each new frame and not while paused. Video is shown on **macOS only** for now (Windows comes in the next change, on `player::windows`); on Windows and Linux the element is black while audio plays and the controls work.
 - **Controls** are Video.js 8's default skin, drawn from `player::ui`: the control bar (play, mute with a volume bar that expands on hover, seek bar with buffered part and hover time, remaining time, a playback-rate button when rates are set, fullscreen), the centred big play button, the loading spinner and the error display. The bar fades out after the inactivity timeout while playing. Clicking the video toggles play and double-clicking toggles fullscreen.
 - **Keyboard**: clicking the player focuses it, and Tab moves through the controls. The `player::ui` hotkeys and seek/volume-bar keys apply as configured; keys the player does not handle, and every key held with Ctrl, Alt or Cmd, go on to the app. The `player_gpui::TogglePlay`, `ToggleMute` and `ToggleFullscreen` actions let app menus drive the focused player.
 - **Controls are on by default.** `.options(...)` takes `player::ui::Options`; for bare video, pass `ui::Options::builder().controls(false).build()?`. As in Video.js, options are read once: when the element's state is created and when it is given a different player. With an aspect ratio set, the element's height follows its width (Video.js's fluid mode).
@@ -188,8 +208,8 @@ The tests need no media files, display, GPU or sound device: they play media mpv
 
 - **macOS:** Apple's software renderer, built in. Set `PLAYER_TEST_GL=hardware` to run them on the GPU instead. The surface tests (`tests/surface.rs`) and the `player-gpui` tests follow the same setting, and the VideoToolbox test runs only with it.
 - **Linux:** Mesa's EGL and llvmpipe (`sudo apt-get install libegl1 libegl-mesa0 libgl1-mesa-dri`; set `LIBGL_ALWAYS_SOFTWARE=1` to use llvmpipe on a machine with a GPU).
-- **Windows:** the system's OpenGL is version 1.1 without a GPU driver, too old for mpv. CI copies Mesa's `opengl32.dll` and `libgallium_wgl.dll` from [mesa-dist-win](https://github.com/pal1000/mesa-dist-win) next to the test binaries (`target/<triple>/debug/deps`) and sets `GALLIUM_DRIVER=llvmpipe`. Only the tests use them; applications keep using the system's OpenGL.
-- **Windows arm64:** no software OpenGL exists (mesa-dist-win builds x64 and x86 only), so CI skips the GL tests there by setting `PLAYER_TEST_SKIP_GL=1`. Rendering on Windows arm64 is therefore not verified by CI; it needs a machine with a GPU driver.
+- **Windows:** the system's OpenGL is version 1.1 without a GPU driver, too old for mpv. CI copies Mesa's `opengl32.dll` and `libgallium_wgl.dll` from [mesa-dist-win](https://github.com/pal1000/mesa-dist-win) next to the test binaries (`target/<triple>/debug/deps`) and sets `GALLIUM_DRIVER=llvmpipe`. Only the tests use them; applications keep using the system's OpenGL. Mesa has no `WGL_NV_DX_interop2`, so the Windows surface tests (`tests/surface/windows.rs`) only check there that building the renderer fails with a clear error, and skip the rest. Run them on a machine with a GPU driver for the full set; `PLAYER_TEST_GL=hardware` adds the NVDEC test.
+- **Windows arm64:** no software OpenGL exists (mesa-dist-win builds x64 and x86 only), so CI skips the GL tests, the surface tests among them, there by setting `PLAYER_TEST_SKIP_GL=1`. Rendering on Windows arm64 is therefore not verified by CI; it needs a machine with a GPU driver.
 
 On the first build `crates/player/build.rs` downloads the `binaries-mpv` release pinned in [`crates/player/mpv-version.txt`](crates/player/mpv-version.txt) for the target (35-70 MB) and caches it in Cargo's `OUT_DIR`; later builds reuse it. The link line is derived from the archive's own `lib/pkgconfig/*.pc` files, so no `pkg-config` binary is needed.
 

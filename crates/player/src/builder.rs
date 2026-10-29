@@ -25,11 +25,12 @@ pub enum VideoOutput {
     #[default]
     Null,
     /// The application draws the video through a [`RenderContext`](crate::RenderContext), which must be created
-    /// before the first [`Player::load`], or on macOS through a surface renderer (`player::macos`). mpv opens no
-    /// window of its own.
+    /// before the first [`Player::load`], or on macOS and Windows through a surface renderer (`player::macos`,
+    /// `player::windows`). mpv opens no window of its own.
     ///
-    /// On macOS this also turns on VideoToolbox hardware decoding (`hwdec=videotoolbox`), whose frames reach the GPU
-    /// without a copy. mpv falls back to software decoding by itself where VideoToolbox cannot decode a file;
+    /// On macOS this also turns on VideoToolbox hardware decoding (`hwdec=videotoolbox`), and on Windows mpv's safe
+    /// automatic hardware decoding (`hwdec=auto-safe`, NVDEC on NVIDIA GPUs), whose frames reach the GPU without a
+    /// copy. mpv falls back to software decoding by itself where no such decoder can decode a file;
     /// `mpv_option("hwdec", "no")` turns it off.
     Render,
 }
@@ -129,10 +130,15 @@ impl PlayerBuilder {
         for (name, value) in defaults {
             mpv.set_option(name, value)?;
         }
-        // Zero-copy hardware decoding: mpv maps each decoded IOSurface straight into the render context's CGL context,
-        // and falls back to software decoding by itself where VideoToolbox cannot decode.
-        if cfg!(target_os = "macos") && self.video_output == VideoOutput::Render {
-            mpv.set_option("hwdec", "videotoolbox")?;
+        // Zero-copy hardware decoding, with mpv falling back to software decoding by itself where it cannot decode.
+        // macOS: each decoded IOSurface is mapped straight into the render context's CGL context. Windows: `auto-safe`
+        // only picks decoders with a GL interop, which hand their frames to the WGL context without a copy (NVDEC).
+        if self.video_output == VideoOutput::Render {
+            if cfg!(target_os = "macos") {
+                mpv.set_option("hwdec", "videotoolbox")?;
+            } else if cfg!(windows) {
+                mpv.set_option("hwdec", "auto-safe")?;
+            }
         }
 
         let paused = self.autoplay == Autoplay::Off;
@@ -200,7 +206,13 @@ mod tests {
     #[test]
     fn hardware_decoding_default() {
         let render = hwdec(Player::builder().video_output(VideoOutput::Render));
-        let expected = if cfg!(target_os = "macos") { "videotoolbox" } else { "no" };
+        let expected = if cfg!(target_os = "macos") {
+            "videotoolbox"
+        } else if cfg!(windows) {
+            "auto-safe"
+        } else {
+            "no"
+        };
         assert_eq!(render, expected);
         assert_eq!(hwdec(Player::builder().video_output(VideoOutput::Null)), "no");
     }

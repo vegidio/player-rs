@@ -8,9 +8,10 @@ use super::{Frame, GlRenderer, SurfaceFormat};
 use crate::error::{Error, Result};
 use crate::player::Player;
 use crate::render::{RenderContext, RenderTarget};
+use crate::surface::OnFrame;
 use glow::HasContext;
+use std::sync::Arc;
 use std::sync::mpsc;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::JoinHandle;
 
 /// Surfaces in the ring: a published frame is overwritten only after two newer ones are published.
@@ -19,75 +20,8 @@ const RING: usize = 3;
 /// How long to wait for the GPU to finish a frame before giving up on it, in nanoseconds.
 const FENCE_TIMEOUT: i32 = 1_000_000_000;
 
-/// The host's notification, called on the render thread after each publication.
-pub(super) type OnFrame = Box<dyn Fn() + Send + Sync + 'static>;
-
 /// What the render thread and the [`SurfaceRenderer`](super::SurfaceRenderer) share.
-#[derive(Default)]
-pub(super) struct Shared {
-    signals: Mutex<Signals>,
-    wake: Condvar,
-    latest: Mutex<Option<Frame>>,
-}
-
-#[derive(Default)]
-struct Signals {
-    /// mpv announced a frame or asked for a redraw.
-    mpv_frame: bool,
-    /// The size requested by the host, before rounding to the format.
-    size: Option<(u32, u32)>,
-    /// `size` changed since the last frame.
-    resized: bool,
-    shutdown: bool,
-}
-
-impl Shared {
-    fn signals(&self) -> MutexGuard<'_, Signals> {
-        self.signals.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    /// From mpv's threads: only sets a flag and wakes the render thread, as mpv requires.
-    fn mpv_frame(&self) {
-        self.signals().mpv_frame = true;
-        self.wake.notify_one();
-    }
-
-    pub(super) fn set_size(&self, width: u32, height: u32) {
-        let mut signals = self.signals();
-        if signals.size != Some((width, height)) {
-            signals.size = Some((width, height));
-            signals.resized = true;
-            self.wake.notify_one();
-        }
-    }
-
-    pub(super) fn shutdown(&self) {
-        self.signals().shutdown = true;
-        self.wake.notify_one();
-    }
-
-    /// Waits for something to render, and returns the size to render at; `None` once shutting down.
-    fn wait(&self) -> Option<Option<(u32, u32)>> {
-        let mut signals = self.signals();
-        while !(signals.mpv_frame || signals.resized || signals.shutdown) {
-            signals = self.wake.wait(signals).unwrap_or_else(PoisonError::into_inner);
-        }
-        if signals.shutdown {
-            return None;
-        }
-        signals.mpv_frame = false;
-        signals.resized = false;
-        Some(signals.size)
-    }
-
-    pub(super) fn latest(&self) -> Option<Frame> {
-        self.latest.lock().unwrap_or_else(PoisonError::into_inner).clone()
-    }
-
-    fn publish(&self, frame: Frame) {
-        *self.latest.lock().unwrap_or_else(PoisonError::into_inner) = Some(frame);
-    }
-}
+pub(super) type Shared = crate::surface::Shared<Frame>;
 
 /// Starts the render thread for `player` and waits for it to be ready, so that its errors are returned here. Also
 /// returns whether it draws with Apple's software renderer.

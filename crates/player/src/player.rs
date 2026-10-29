@@ -114,14 +114,14 @@ impl Player {
     }
 
     /// The state shared with the event thread, which a surface renderer tells of its existence.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     pub(crate) fn shared(&self) -> &Arc<Shared> {
         &self.inner.shared
     }
 
     /// Records that a surface renderer now exists, and loads the media again if it ended for want of one: media
     /// without audio ends as soon as its video output fails to start.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     pub(crate) fn surface_attached(&self) {
         if let Some(source) = self.inner.shared.surface_attached(true) {
             let _ = event::load(self.mpv(), self.inner.autoplay, &source);

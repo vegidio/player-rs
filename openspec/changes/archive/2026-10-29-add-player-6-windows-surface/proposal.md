@@ -9,16 +9,16 @@ A finding shaped the plan. Stock GPUI cannot show an external GPU texture on Win
 
 The user chose to fork GPUI (`gpui-pre` and `gpui-pre-windows`), add Windows surface support there, and send it upstream once it is verified. Apps then add a `[patch.crates-io]` entry until upstream ships it. The fork is slice 7's work. This slice produces a toolkit-agnostic texture stream that the fork, or a wgpu/D3D frontend, can import. It can be tested on its own, without GPUI.
 
-The libmpv build for Windows renders only through OpenGL (WGL, `opengl32`; no ANGLE/EGL). So the bridge is `WGL_NV_DX_interop2`: mpv draws through GL straight into a D3D11 texture. NVIDIA, AMD and Intel drivers expose this extension.
+The libmpv build for Windows renders only through OpenGL (WGL, `opengl32`; no ANGLE/EGL). So the bridge is `WGL_NV_DX_interop2`: mpv draws through GL into a D3D11 texture, which is copied on the GPU into the shared one (NVIDIA's interop refuses NT-handle textures; see design.md). NVIDIA, AMD and Intel drivers expose this extension.
 
 ## What Changes
 
 - **`crates/player`, new Windows-only module `player::windows`** (toolkit-agnostic, no GPUI types), mirroring `player::macos`:
-  - `SurfaceRenderer`, a safe type owning a render thread with:
+  - `SurfaceRenderer`, a safe type with its own render thread (taken from a process-wide pool, because threads that used NVIDIA's GL driver deadlock when they exit) with:
     - a hidden window and an offscreen WGL context
     - its own D3D11 device on a chosen DXGI adapter (by default the first adapter that supports D3D11, the one GPUI picks; or one given by LUID)
     - slice 2's `RenderContext` on that context
-    - a small ring of BGRA D3D11 textures, created shareable through NT handles and registered with GL through `WGL_NV_DX_interop2`
+    - a BGRA D3D11 texture registered with GL through `WGL_NV_DX_interop2`, which mpv draws into, and a small ring of BGRA D3D11 textures shareable through NT handles, which each frame is copied into on the GPU
   - It renders each frame mpv announces at the size the host sets, waits for the GPU to finish, publishes the newest frame (readable from any thread) and calls a host callback, as on macOS.
   - `Frame` gives the texture's shared NT handle (a std `BorrowedHandle`), its size, sequence number and adapter LUID. No `windows` crate type is in the public API.
   - The format is BGRA only. NV12 existed on macOS only because stock GPUI required it there, and slice 7 writes GPUI's Windows import itself.

@@ -205,7 +205,7 @@ impl Shared {
 
     /// Records whether a surface renderer exists, and returns the source to load again if its media already failed
     /// for want of one.
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     pub(crate) fn surface_attached(&self, attached: bool) -> Option<Source> {
         let mut recovery = self.recovery();
         recovery.surface = attached;

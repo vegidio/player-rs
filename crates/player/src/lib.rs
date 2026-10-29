@@ -85,6 +85,11 @@
 //! render thread and OpenGL context, and hands out each frame as an IOSurface-backed `CVPixelBuffer`, with no
 //! `unsafe` code. The module exists on macOS only.
 //!
+//! On Windows, toolkits that draw with Direct3D (GPUI among them) use `player::windows::SurfaceRenderer`. It has its
+//! own render thread, OpenGL context and Direct3D 11 device, and hands out each frame as a Direct3D 11 texture shared
+//! through an NT handle, again without a copy through the CPU and with no `unsafe` code. The module exists on Windows
+//! only, and Linux has no surface renderer yet.
+//!
 //! # The UI layer
 //!
 //! [`ui`] gives every frontend the Video.js player experience without drawing anything: [`ui::Controls`] takes the
@@ -106,6 +111,8 @@ pub mod error;
 pub mod macos;
 pub mod prelude;
 pub mod ui;
+#[cfg(windows)]
+pub mod windows;
 
 mod builder;
 mod event;
@@ -113,6 +120,8 @@ mod mpv;
 mod player;
 mod render;
 mod source;
+#[cfg(any(target_os = "macos", windows))]
+mod surface;
 
 /// The integration tests' headless GL context, shared with the unit tests that need a real render context.
 #[cfg(test)]

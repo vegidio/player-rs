@@ -51,12 +51,13 @@ use crate::builder::VideoOutput;
 use crate::error::{Error, Result};
 use crate::event;
 use crate::player::Player;
+use crate::surface::OnFrame;
 use objc2_core_foundation::CFRetained;
 use objc2_core_video::CVPixelBuffer;
 use std::fmt;
 use std::sync::Arc;
 use std::thread::JoinHandle;
-use thread::{OnFrame, Shared};
+use thread::Shared;
 
 /// Renders a player's video into IOSurface-backed `CVPixelBuffer`s on a thread it owns, and publishes the newest one.
 ///
@@ -95,8 +96,7 @@ impl SurfaceRenderer {
 
 impl Drop for SurfaceRenderer {
     fn drop(&mut self) {
-        // Detaching never asks for a reload.
-        let _ = self.player.surface_attached(false);
+        crate::surface::detached(&self.player);
         self.shared.shutdown();
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
@@ -159,8 +159,7 @@ impl SurfaceRendererBuilder {
         if software {
             use_bilinear_scaling(&self.player);
         }
-        reselect_video(&self.player);
-        self.player.surface_attached();
+        crate::surface::attached(&self.player);
         Ok(SurfaceRenderer { shared, thread: Some(thread), player: Arc::clone(self.player.shared()) })
     }
 }
@@ -179,21 +178,6 @@ impl fmt::Debug for SurfaceRendererBuilder {
 fn use_bilinear_scaling(player: &Player) {
     for option in ["scale", "dscale", "cscale"] {
         let _ = player.set_property(option, "bilinear".to_string());
-    }
-}
-
-/// Media loaded while a player has no render context plays without video: mpv deselects the video track when its
-/// video output fails to start, although the `vid` option still asks for one. Selecting the first video track again
-/// restarts the video output, now with this render context, while audio and the position carry on.
-fn reselect_video(player: &Player) {
-    let string = |name: &str| player.get_property::<String>(name).ok();
-    if string("vid").as_deref() != Some("no") || string("options/vid").as_deref() == Some("no") {
-        return;
-    }
-    let count = player.get_property::<i64>("track-list/count").unwrap_or(0);
-    let video = (0..count).find(|track| string(&format!("track-list/{track}/type")).as_deref() == Some("video"));
-    if let Some(id) = video.and_then(|track| player.get_property::<i64>(&format!("track-list/{track}/id")).ok()) {
-        let _ = player.set_property("vid", id);
     }
 }
 

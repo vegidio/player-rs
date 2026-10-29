@@ -84,11 +84,14 @@ jobs:
             runner: ubuntu-24.04-arm
             target: aarch64-unknown-linux-gnu
           # Windows: stock MSVC targets. The archives ship no DLLs, so nothing is added to PATH.
+          # Mesa has no WGL_NV_DX_interop2, so the Windows surface tests check only that building a renderer fails
+          # with a clear error, and skip the rest; they run in full on a machine with a GPU driver.
           - name: Windows x64
             runner: windows-latest
             target: x86_64-pc-windows-msvc
           # No software OpenGL exists for Windows arm64 (mesa-dist-win builds x64 and x86 only, and an arm64
-          # process cannot load x64 DLLs); the runner offers only GDI's OpenGL 1.1. The GL tests are skipped there.
+          # process cannot load x64 DLLs); the runner offers only GDI's OpenGL 1.1. The GL tests, the surface tests
+          # among them, are skipped there.
           - name: Windows arm64
             runner: windows-11-arm
             target: aarch64-pc-windows-msvc

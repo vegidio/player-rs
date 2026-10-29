@@ -5388,6 +5388,7 @@ dependencies = [
  "rust-sak",
  "thiserror 2.0.21",
  "ureq",
+ "windows 0.62.2",
  "windows-sys 0.52.0",
  "zip",
 ]
