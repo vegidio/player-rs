@@ -24,8 +24,10 @@ gpui-kit = { version = "0.8.1", default-features = false, features = ["component
 # Logging of requests mpv rejects, and of video that cannot be shown: GPUI's own logging facade.
 log = "0.4"
 
-# The video element's frame subscription. Video is macOS-only.
-[target.'cfg(target_os = "macos")'.dependencies]
+# The video element's frame subscription, on macOS and Windows. Windows video needs GPUI patched with Windows surfaces
+# (see the README's "Windows video"); without the patch, the build fails with an error naming
+# `WINDOWS_SURFACES_REQUIRE_PATCHED_GPUI`.
+[target.'cfg(any(target_os = "macos", windows))'.dependencies]
 flume = "0.12"
 
 [dev-dependencies]
@@ -34,3 +36,16 @@ gpui-kit = { version = "0.8.1", default-features = false, features = ["component
 # RAII temporary directories for the WAV media of the control tests. A git dependency without a version is stripped by
 # `cargo publish`, so the crate stays publishable.
 rust-sak = { git = "https://github.com/vegidio/rust-sak", tag = "26.10.1", default-features = false, features = ["fs"] }
+
+# The Windows video tests: a shared Direct3D 11 texture made by the test (the version GPUI and `player-rs` use), and
+# GPUI's headless Direct3D renderer, which only the patched `gpui-pre-windows` has. Both are already in the graph.
+[target.'cfg(windows)'.dev-dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+] }
+gpui-pre-windows = { version = "=0.3.10", features = ["test-support"] }

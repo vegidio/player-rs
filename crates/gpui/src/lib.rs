@@ -59,6 +59,18 @@
 //!   icons that bundle lacks, into it instead. Without either, some control icons are blank.
 //! - **Player.** It must be built with `VideoOutput::Render`. It may load media before the element is first rendered.
 //!   Otherwise the element stays black and logs a warning.
+//! - **Windows.** Apps that build for Windows must patch GPUI's `gpui-pre` and `gpui-pre-windows` in their workspace
+//!   root with the fork that adds Windows surfaces:
+//!
+//!   ```toml
+//!   [patch.crates-io]
+//!   gpui-pre = { git = "https://github.com/vegidio/gpui-pre", tag = "0.3.10-surfaces.1" }
+//!   gpui-pre-windows = { git = "https://github.com/vegidio/gpui-pre", tag = "0.3.10-surfaces.1" }
+//!   ```
+//!
+//!   Without the patch, the build fails with an error naming `WINDOWS_SURFACES_REQUIRE_PATCHED_GPUI`. Only GPUI-Kit's
+//!   default backend is covered, not `gpui-fast`. Other platforms need no patch. See the
+//!   [README](https://github.com/vegidio/player-rs#windows-video) for the details.
 //!
 //! # Controls
 //!
@@ -91,8 +103,10 @@
 //!   change of the controls, such as the seek bar moving by a pixel. Keep those views cheap, and show expensive parts
 //!   next to the video as cached views (`Entity::cached`).
 //! - **Sharpness.** Frames are rendered at the element's size in device pixels.
-//! - **Platforms.** Video is shown on macOS. On Windows and Linux the element is black while audio and the controls
-//!   keep working, until those platforms get video surfaces.
+//! - **Platforms.** Video is shown on macOS, and on Windows with the patched GPUI (see [Setup](#setup)). There the
+//!   graphics driver must share OpenGL textures with Direct3D 11 (`WGL_NV_DX_interop2`), on the GPU GPUI uses;
+//!   otherwise, as on hybrid-GPU laptops where the two land on different GPUs, the element is black and one warning
+//!   is logged. On Linux the element is black. Wherever it is black, audio and the controls keep working.
 //! - **Cursor.** Unlike Video.js, the pointer cursor stays visible while the user is inactive: GPUI has no way to hide
 //!   it on demand.
 //! - **Not yet.** The rate button cycles the rates instead of opening Video.js's menu. Menus (rates, tracks),
@@ -101,11 +115,16 @@
 // GPUI's derive macros name the `gpui` crate; through this alias they resolve to the GPUI that GPUI-Kit re-exports.
 extern crate gpui_kit as gpui;
 
+/// Windows video needs GPUI patched with Windows surfaces: see the README's "Windows video" section. Stock GPUI lacks
+/// this item, so without the patch the build fails here first, with its name.
+#[cfg(windows)]
+const _: () = gpui_kit::WINDOWS_SURFACES_REQUIRE_PATCHED_GPUI;
+
 mod assets;
 mod controls;
 mod element;
 mod keys;
-#[cfg(target_os = "macos")]
+#[cfg(video)]
 mod video;
 
 pub use assets::{Assets, Icons};

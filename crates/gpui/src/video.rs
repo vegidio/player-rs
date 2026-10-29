@@ -1,11 +1,16 @@
-//! macOS: the view that draws a player's NV12 surfaces with `paint_surface`.
+//! The view that draws a player's video surfaces with `paint_surface`: on macOS and Windows.
+//! Only building the renderer and the paint call differ per platform, in `surface`.
 
 use gpui_kit::*;
 use player::Player;
-use player::macos::{Frame, GlRenderer, SurfaceFormat, SurfaceRenderer};
 use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::Arc;
+use surface::{Frame, SurfaceRenderer};
+
+#[cfg_attr(target_os = "macos", path = "video/macos.rs")]
+#[cfg_attr(windows, path = "video/windows.rs")]
+mod surface;
 
 /// Owns the player's surface renderer and repaints when it publishes a frame. Kept in the element's keyed state (see
 /// [`VideoPlayer`](crate::VideoPlayer)) and rendered cached, so the parent re-rendering does not re-render it.
@@ -26,13 +31,9 @@ impl VideoView {
     pub(crate) fn new(player: &Player, cx: &mut Context<Self>) -> Self {
         // The renderer only signals; a frame already waiting covers any that arrive before it is handled.
         let (signal, frames) = flume::bounded(1);
-        let renderer = SurfaceRenderer::builder(player)
-            .format(SurfaceFormat::Nv12)
-            .gl_renderer(gl_renderer())
-            .on_frame(move || {
-                let _ = signal.try_send(());
-            })
-            .build();
+        let renderer = surface::build(player, move || {
+            let _ = signal.try_send(());
+        });
 
         let (renderer, task) = match renderer {
             Ok(renderer) => {
@@ -64,16 +65,10 @@ impl VideoView {
     }
 }
 
-/// The OpenGL renderer: the GPU where there is one. The tests follow the crate's `PLAYER_TEST_GL` convention instead:
-/// Apple's software renderer, as on CI, unless `PLAYER_TEST_GL=hardware`.
-fn gl_renderer() -> GlRenderer {
-    if !cfg!(test) {
-        GlRenderer::Auto
-    } else if std::env::var("PLAYER_TEST_GL").is_ok_and(|value| value == "hardware") {
-        GlRenderer::Hardware
-    } else {
-        GlRenderer::Software
-    }
+/// Where a `width` x `height` frame goes in `bounds`: centred at its aspect ratio, as Video.js letterboxes. A frame of
+/// a previous size, or rounded up to even for NV12, is fitted rather than stretched.
+fn fit(bounds: Bounds<Pixels>, width: u32, height: u32) -> Bounds<Pixels> {
+    ObjectFit::Contain.get_bounds(bounds, size(DevicePixels(width as i32), DevicePixels(height as i32)))
 }
 
 impl Render for VideoView {
@@ -98,10 +93,7 @@ impl Render for VideoView {
             },
             |bounds, frame: Option<Frame>, window, _| {
                 if let Some(frame) = frame {
-                    // A frame of a previous size, or rounded up to even for NV12, is fitted rather than stretched.
-                    let frame_size = size(DevicePixels(frame.width() as i32), DevicePixels(frame.height() as i32));
-                    let fitted = ObjectFit::Contain.get_bounds(bounds, frame_size);
-                    window.paint_surface(fitted, frame.pixel_buffer().clone());
+                    surface::paint(window, fit(bounds, frame.width(), frame.height()), &frame);
                 }
             },
         )
@@ -150,6 +142,47 @@ pub(crate) mod tests {
         pub(crate) fn renders(&self) -> usize {
             self.renders
         }
+    }
+
+    /// The error a Windows OpenGL driver without `WGL_NV_DX_interop2` gives, as Mesa's on CI.
+    #[cfg(windows)]
+    const NO_SHARING: &str = "cannot share textures with Direct3D 11";
+
+    /// Whether the GL tests are skipped (`PLAYER_TEST_SKIP_GL`), as on CI's Windows arm64.
+    fn gl_skipped() -> bool {
+        std::env::var("PLAYER_TEST_SKIP_GL").is_ok_and(|value| !value.is_empty())
+    }
+
+    /// Whether the OpenGL driver cannot share textures with Direct3D 11, so no renderer can be built.
+    #[cfg(windows)]
+    pub(crate) fn no_interop() -> bool {
+        static NO_INTEROP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *NO_INTEROP.get_or_init(|| {
+            let player = Player::builder().video_output(VideoOutput::Render).mpv_option("ao", "null").build().unwrap();
+            match surface::build(&player, || {}) {
+                Ok(_) => false,
+                Err(Error::Render(message)) if message.contains(NO_SHARING) => true,
+                Err(error) => panic!("the surface renderer cannot be created: {error}"),
+            }
+        })
+    }
+
+    /// Whether this machine cannot show video, so the tests that need frames return early: GL tests are skipped, or,
+    /// on Windows, the OpenGL driver cannot share textures with Direct3D 11.
+    pub(crate) fn cannot_show_video() -> bool {
+        let reason = if gl_skipped() {
+            Some("PLAYER_TEST_SKIP_GL is set, so no OpenGL context is created")
+        } else {
+            #[cfg(windows)]
+            let reason = no_interop().then_some("the OpenGL driver cannot share textures with Direct3D 11");
+            #[cfg(not(windows))]
+            let reason = None;
+            reason
+        };
+        if let Some(reason) = reason {
+            eprintln!("skipped: {reason}");
+        }
+        reason.is_some()
     }
 
     /// Generated 160x120 video with a tone, long enough not to end during a test.
@@ -276,6 +309,9 @@ pub(crate) mod tests {
 
     #[gpui_kit::test]
     fn state_survives_parent_rerenders(cx: &mut TestAppContext) {
+        if cannot_show_video() {
+            return;
+        }
         // Loaded before the element is first rendered, as a view constructor would.
         let player = playing();
         let harness = open(cx, &[&player]);
@@ -306,6 +342,9 @@ pub(crate) mod tests {
 
     #[gpui_kit::test]
     fn switches_player_under_the_same_id(cx: &mut TestAppContext) {
+        if cannot_show_video() {
+            return;
+        }
         let (first, second) = (playing(), playing());
         let harness = open(cx, &[&first]);
         let old = harness.wait_for_video(cx, 1).downgrade();
@@ -318,12 +357,15 @@ pub(crate) mod tests {
 
         // The first player was released and keeps playing without video.
         assert!(!first.state().paused);
-        let renderer = SurfaceRenderer::builder(&first).gl_renderer(gl_renderer()).build();
-        assert!(renderer.is_ok(), "the first player's renderer was released: {renderer:?}");
+        let renderer = surface::build(&first, || {});
+        assert!(renderer.is_ok(), "the first player's renderer was released: {:?}", renderer.err());
     }
 
     #[gpui_kit::test]
     fn removing_the_element_releases_its_state(cx: &mut TestAppContext) {
+        if cannot_show_video() {
+            return;
+        }
         let player = playing();
         let harness = open(cx, &[&player]);
         harness.wait_for_video(cx, 1);
@@ -331,14 +373,17 @@ pub(crate) mod tests {
         harness.update(cx, |parent| parent.show = false);
         harness.pump(cx, "the view to be released", |_| live_views().is_empty());
 
-        let renderer = SurfaceRenderer::builder(&player).gl_renderer(gl_renderer()).build();
-        assert!(renderer.is_ok(), "the renderer was released: {renderer:?}");
+        let renderer = surface::build(&player, || {});
+        assert!(renderer.is_ok(), "the renderer was released: {:?}", renderer.err());
         player.pause().unwrap();
         assert!(player.get_property::<bool>("pause").unwrap(), "the player still responds");
     }
 
     #[gpui_kit::test]
     fn two_players_side_by_side(cx: &mut TestAppContext) {
+        if cannot_show_video() {
+            return;
+        }
         let (first, second) = (playing(), playing());
         let harness = open(cx, &[&first, &second]);
         harness.pump(cx, "both videos", |cx| {
@@ -351,6 +396,9 @@ pub(crate) mod tests {
 
     #[gpui_kit::test]
     fn renders_at_bounds_times_scale_factor(cx: &mut TestAppContext) {
+        if cannot_show_video() {
+            return;
+        }
         let player = playing();
         let harness = open(cx, &[&player]);
         let view = harness.wait_for_video(cx, 1);
@@ -372,5 +420,64 @@ pub(crate) mod tests {
         let view = live_views().remove(0);
         assert!(cx.read(|cx| view.read(cx).renderer().is_none()));
         player.set_volume(0.5).unwrap();
+    }
+
+    /// Warnings logged on this thread since the last call, for the tests that count them.
+    #[cfg(windows)]
+    pub(crate) fn take_warnings() -> Vec<String> {
+        struct Capture;
+
+        thread_local! {
+            static WARNINGS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+        }
+
+        impl log::Log for Capture {
+            fn enabled(&self, metadata: &log::Metadata) -> bool {
+                metadata.level() <= log::Level::Warn
+            }
+
+            fn log(&self, record: &log::Record) {
+                if self.enabled(record.metadata()) {
+                    WARNINGS.with_borrow_mut(|warnings| warnings.push(record.args().to_string()));
+                }
+            }
+
+            fn flush(&self) {}
+        }
+
+        static CAPTURE: Capture = Capture;
+        static INSTALLED: std::sync::Once = std::sync::Once::new();
+        INSTALLED.call_once(|| {
+            log::set_logger(&CAPTURE).expect("no other logger in the tests");
+            log::set_max_level(log::LevelFilter::Warn);
+        });
+        WARNINGS.with_borrow_mut(std::mem::take)
+    }
+
+    /// The scenario CI's Mesa runs: the element stays black, warns once however often it is drawn, and the player
+    /// keeps working.
+    #[cfg(windows)]
+    #[gpui_kit::test]
+    fn warns_once_without_interop(cx: &mut TestAppContext) {
+        if gl_skipped() || !no_interop() {
+            eprintln!("skipped: needs an OpenGL driver that cannot share textures with Direct3D 11, as Mesa's");
+            return;
+        }
+        take_warnings();
+        let player = playing();
+        let harness = open(cx, &[&player]);
+        harness.pump(cx, "the view", |_| live_views().len() == 1);
+        for _ in 0..5 {
+            harness.update(cx, |_| {});
+            harness.draw(cx);
+        }
+
+        let view = live_views().remove(0);
+        assert!(cx.read(|cx| view.read(cx).renderer().is_none()), "the element stays black");
+        let warnings = take_warnings();
+        let about_sharing = warnings.iter().filter(|warning| warning.contains(NO_SHARING)).count();
+        assert_eq!(about_sharing, 1, "one warning naming the reason: {warnings:?}");
+        player.set_volume(0.5).unwrap();
+        assert_eq!(player.get_property::<f64>("volume").unwrap(), 50.0);
     }
 }

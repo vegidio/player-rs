@@ -61,6 +61,26 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --exclude xtask --all-targets -- -D warnings
 
+  # `player-gpui`'s Windows video is Windows-only code, which the Linux lint never compiles.
+  lint-windows:
+    name: Lint (Windows video)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: lint-windows
+
+      - name: Clippy
+        run: cargo clippy -p player-gpui --all-targets -- -D warnings
+
   test:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.runner }}
@@ -122,6 +142,12 @@ jobs:
       - name: Build
         run: cargo build -p player-rs -p player-gpui --target ${{ matrix.target }} --all-targets
 
+      # CI tests in debug, where GPUI compiles its shaders at run time; a release build compiles them with the Windows
+      # SDK's `fxc.exe`, the fork's `surface` shader among them.
+      - name: Build release example
+        if: matrix.target == 'x86_64-pc-windows-msvc'
+        run: cargo build --release -p player-gpui --target ${{ matrix.target }} --example play
+
       # The system's GDI OpenGL is version 1.1, which mpv cannot use. Mesa's `opengl32.dll` placed next to the test
       # binaries is loaded instead, since Windows searches the executable's folder first. Only the tests use it;
       # shipped apps keep importing the system's DLLs.
@@ -143,3 +169,4 @@ jobs:
           LIBGL_ALWAYS_SOFTWARE: "1"
           GALLIUM_DRIVER: llvmpipe
           PLAYER_TEST_SKIP_GL: ${{ matrix.skip_gl && '1' || '' }}
+

@@ -2761,8 +2761,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre"
 version = "0.3.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "df4b5f8d0c278308df2f11e0bfe0212dd77d7848ce1bdc4b9d513334414396f6"
+source = "git+https://github.com/vegidio/gpui-pre?tag=0.3.10-surfaces.1#772572de23bc68abe92e995a60d26e4e7ad3fd47"
 dependencies = [
  "accesskit",
  "anyhow",
@@ -3217,8 +3216,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre-windows"
 version = "0.3.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "80670f987b920fba019917b2e222ecf2b377f2a6d77872010c7d284c235837b3"
+source = "git+https://github.com/vegidio/gpui-pre?tag=0.3.10-surfaces.1#772572de23bc68abe92e995a60d26e4e7ad3fd47"
 dependencies = [
  "accesskit",
  "accesskit_windows",
@@ -5369,9 +5367,11 @@ version = "26.10.0"
 dependencies = [
  "flume",
  "gpui-kit",
+ "gpui-pre-windows",
  "log",
  "player-rs",
  "rust-sak",
+ "windows 0.62.2",
 ]
 
 [[package]]

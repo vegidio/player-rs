@@ -5,7 +5,7 @@ On Windows, `player_gpui::VideoPlayer` shows black while audio plays and the con
 - `Window::paint_surface` and `surface()` are `cfg(macos/ios)`.
 - `DirectXRenderer::draw_surfaces` is an empty stub.
 
-This is slice 7 of the `add-player` series, the second of the two Windows slices. As the user decided in slice 6, it forks those two GPUI crates and adds Windows surface support to them. Apps take the fork through `[patch.crates-io]`. `player-gpui` then shows Windows video behind an opt-in feature, and the fork's change is sent upstream to `zed-industries/zed` once it is verified.
+This is slice 7 of the `add-player` series, the second of the two Windows slices. As the user decided in slice 6, it forks those two GPUI crates and adds Windows surface support to them. Apps take the fork through `[patch.crates-io]`. `player-gpui` then shows Windows video behind an opt-in feature.
 
 ## What Changes
 
@@ -16,9 +16,9 @@ This is slice 7 of the `add-player` series, the second of the two Windows slices
     - `SurfaceSource` and `surface()` get the matching Windows variant.
     - A public marker item lets a crate that needs the fork fail with a readable error when the `[patch]` is missing.
   - **`gpui-pre-windows`**:
-    - `draw_surfaces` opens each shared texture on GPUI's own D3D11 device (`ID3D11Device1::OpenSharedResource1`) and keeps it in a small cache. It draws the texture into its bounds, clipped to the content mask, with a new `surface` HLSL shader. That shader is added to the release build's `fxc` module list.
-    - The cache is dropped on device loss.
+    - `draw_surfaces` opens each shared texture on GPUI's own D3D11 device (`ID3D11Device1::OpenSharedResource1`) on every draw. It draws the texture into its bounds, clipped to the content mask, with a new `surface` HLSL shader. That shader is added to the release build's `fxc` module list.
     - A texture that cannot be opened is skipped, and a warning is logged once.
+    - Under `test-support`, a `DirectXHeadlessRenderer`, because GPUI has no headless renderer on Windows to run pixel tests with.
   - No CPU copy is made anywhere.
 - **`crates/gpui`** (`player-gpui`):
   - A new opt-in feature `windows-video`. On Windows, it gives `VideoPlayer` the same video view as macOS, built on `player::windows::SurfaceRenderer`:
@@ -31,7 +31,7 @@ This is slice 7 of the `add-player` series, the second of the two Windows slices
   - With the feature but without the `[patch]`, the build fails with an error that names the marker. The README explains it.
 - **This workspace**: `[patch.crates-io]` for `gpui-pre` and `gpui-pre-windows`, pointing at a tag of the fork, so the example, the tests and CI use it.
 - **Docs**: README and crate-doc setup steps for Windows video (the feature, the `[patch]` lines, and the `gpui-pre` backend requirement). The platform table is updated.
-- **Upstream**: after manual verification, and once the user gives the go-ahead, the fork's change is ported to `zed-industries/zed` (crates `gpui` and `gpui_windows`) and opened as a PR. Once a GPUI-Kit release ships it, the `[patch]` can go. That happens in a later change.
+- **No upstream PR**: the user decided not to contribute the change to `zed-industries/zed`. The fork and the `[patch]` stay for as long as GPUI-Kit's GPUI cannot draw a shared Direct3D texture on Windows by itself.
 
 `crates/player` is not touched. Slice 6's `player::windows` API is used as it is.
 
@@ -55,8 +55,8 @@ None.
 - **Video.js reference**: the `<video>` area of a Video.js player, with the video letterboxed on black under the control bar. This is the same look as macOS, now on Windows.
 - **libmpv APIs**: none new. Slice 6's renderer and its `hwdec=auto-safe` default are used unchanged.
 - **Windows APIs**:
-  - In the fork: `ID3D11Device1::OpenSharedResource1`, `DuplicateHandle` (through std `BorrowedHandle::try_clone_to_owned`), `CompareObjectHandles` (Windows 10+) for the texture cache, and the D3D11 shader-resource views and pipeline GPUI already uses.
-  - In `player-gpui`'s tests only: `windows` 0.62 (dev) to make a shared test texture.
+  - In the fork: `ID3D11Device1::OpenSharedResource1`, `DuplicateHandle` (through std `BorrowedHandle::try_clone_to_owned`), and the D3D11 shader-resource views and pipeline GPUI already uses.
+  - In `player-gpui`'s tests only: `windows` 0.62 (dev) to make a shared test texture, and `gpui-pre-windows` (dev, patched) for the headless renderer.
 - **Public API**:
   - `player-gpui`: a new `windows-video` feature. Its Rust API is unchanged.
   - The fork: `Window::paint_surface` and `surface()` on Windows, a `PaintSurface` field, and the marker item. All are additive.
@@ -70,5 +70,5 @@ None.
   - Only the `gpui-pre` backend is covered. Apps on GPUI-Kit's `gpui-fast` backend keep black video on Windows. The `gpui-fast` fork is deferred to slice 8+.
   - Linux stays black, as documented.
   - On CI, Mesa has no interop. The core renderer cannot be built there, so the video tests that need it skip. The fork's drawing is still tested on CI with a shared texture the test makes itself (see design.md).
-- **Outward-facing steps** (each needs the user's go-ahead): creating and pushing the fork repository and its tag, and opening the upstream PR.
-- **Size**: 14 tasks. This is slice 7 of the `add-player` series (see design.md). It depends on slices 5 and 6.
+- **Outward-facing steps** (each needs the user's go-ahead): creating and pushing the fork repository and its tag.
+- **Size**: 13 tasks. This is slice 7 of the `add-player` series (see design.md). It depends on slices 5 and 6.

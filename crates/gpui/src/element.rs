@@ -1,7 +1,7 @@
 //! [`VideoPlayer`]: a player's video and its Video.js controls as a GPUI element.
 
 use crate::controls::{ControlsView, FullscreenCallback};
-#[cfg(target_os = "macos")]
+#[cfg(video)]
 use crate::video::VideoView;
 use gpui_kit::*;
 use player::{Player, ui};
@@ -15,8 +15,9 @@ use std::rc::Rc;
 /// different player under the same id switches to that player. Once no element with the id is rendered, the state is
 /// released and the player keeps playing without video.
 ///
-/// The player must be built with [`VideoOutput::Render`](player::VideoOutput::Render). Video is shown on macOS only:
-/// on Windows and Linux the element is black, while audio and the controls keep working.
+/// The player must be built with [`VideoOutput::Render`](player::VideoOutput::Render). Video is shown on macOS, and on
+/// Windows with a patched GPUI (see the [crate's setup](crate#setup)). On Linux, and wherever the video cannot be
+/// shown, the element is black, while audio and the controls keep working.
 #[derive(IntoElement)]
 pub struct VideoPlayer {
     id: ElementId,
@@ -30,7 +31,7 @@ pub struct VideoPlayer {
 /// different player, and are rendered cached, so neither the parent re-rendering nor video frames re-render the
 /// controls.
 struct Slot {
-    #[cfg(target_os = "macos")]
+    #[cfg(video)]
     video: Entity<VideoView>,
     controls: Entity<ControlsView>,
 }
@@ -38,7 +39,7 @@ struct Slot {
 impl Slot {
     fn new(player: &Player, options: ui::Options, window: &mut Window, cx: &mut Context<Self>) -> Self {
         Self {
-            #[cfg(target_os = "macos")]
+            #[cfg(video)]
             video: cx.new(|cx| VideoView::new(player, cx)),
             controls: cx.new(|cx| ControlsView::new(player, options, window, cx)),
         }
@@ -108,13 +109,13 @@ impl RenderOnce for VideoPlayer {
         }
         root.style().refine(&style);
 
-        #[cfg(target_os = "macos")]
+        #[cfg(video)]
         let root = root.child(slot.read(cx).video.clone().cached(StyleRefinement::default().size_full()));
         root.child(controls.cached(StyleRefinement::default().absolute().top_0().left_0().size_full()))
     }
 }
 
-#[cfg(all(test, not(target_os = "macos")))]
+#[cfg(all(test, not(video)))]
 mod tests {
     use super::*;
     use gpui_kit::TestAppContext;
@@ -133,6 +134,8 @@ mod tests {
     /// Without video surfaces the element is a black `div`, and the player keeps working.
     #[gpui_kit::test]
     fn builds_and_draws_black(cx: &mut TestAppContext) {
+        // The controls hear the player's events from mpv's thread, which the test scheduler must accept.
+        cx.executor().allow_parking();
         let player = Player::builder().video_output(VideoOutput::Render).mpv_option("ao", "null").build().unwrap();
         let window = cx.add_window({
             let player = player.clone();

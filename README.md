@@ -4,7 +4,7 @@ A fast, user-friendly video player for Rust, built on [libmpv](https://mpv.io). 
 
 libmpv and everything it depends on (FFmpeg, libplacebo, libass, …) are linked **statically** from the prebuilt archives of [vegidio/binaries-mpv](https://github.com/vegidio/binaries-mpv). Programs built with `player-rs` need neither mpv nor FFmpeg installed.
 
-> **Status:** early. `player-rs` plays media and draws its video into an OpenGL framebuffer the application provides, on every supported platform (rendering on Windows arm64 is not verified by CI, see [Building](#building)). On macOS it also renders into IOSurfaces that Metal toolkits can show without a copy, and on Windows into Direct3D 11 textures shared through NT handles. `player-gpui` shows the video in a GPUI window with Video.js's controls, from the toolkit-agnostic `player::ui` layer. Video in GPUI on Windows (the next change) and Linux, and the Video.js menus, captions and poster, come in later changes.
+> **Status:** early. `player-rs` plays media and draws its video into an OpenGL framebuffer the application provides, on every supported platform (rendering on Windows arm64 is not verified by CI, see [Building](#building)). On macOS it also renders into IOSurfaces that Metal toolkits can show without a copy, and on Windows into Direct3D 11 textures shared through NT handles. `player-gpui` shows the video in a GPUI window with Video.js's controls, from the toolkit-agnostic `player::ui` layer, on macOS, and on Windows with a patched GPUI (see [Windows video](#windows-video)). Video in GPUI on Linux, and the Video.js menus, captions and poster, come in later changes.
 
 ## Workspace
 
@@ -136,7 +136,7 @@ fn main() {
 }
 ```
 
-- **Video** is shown upright and letterboxed on black, at the element's size in device pixels. It repaints for each new frame and not while paused. Video is shown on **macOS only** for now (Windows comes in the next change, on `player::windows`); on Windows and Linux the element is black while audio plays and the controls work.
+- **Video** is shown upright and letterboxed on black, at the element's size in device pixels. It repaints for each new frame and not while paused. Video is shown on **macOS**, and on **Windows** with a patched GPUI (see [Windows video](#windows-video)). On Linux, the element is black while audio plays and the controls work.
 - **Controls** are Video.js 8's default skin, drawn from `player::ui`: the control bar (play, mute with a volume bar that expands on hover, seek bar with buffered part and hover time, remaining time, a playback-rate button when rates are set, fullscreen), the centred big play button, the loading spinner and the error display. The bar fades out after the inactivity timeout while playing. Clicking the video toggles play and double-clicking toggles fullscreen.
 - **Keyboard**: clicking the player focuses it, and Tab moves through the controls. The `player::ui` hotkeys and seek/volume-bar keys apply as configured; keys the player does not handle, and every key held with Ctrl, Alt or Cmd, go on to the app. The `player_gpui::TogglePlay`, `ToggleMute` and `ToggleFullscreen` actions let app menus drive the focused player.
 - **Controls are on by default.** `.options(...)` takes `player::ui::Options`; for bare video, pass `ui::Options::builder().controls(false).build()?`. As in Video.js, options are read once: when the element's state is created and when it is given a different player. With an aspect ratio set, the element's height follows its width (Video.js's fluid mode).
@@ -149,6 +149,32 @@ Try it with:
 ```sh
 cargo run -p player-gpui --example play -- path/to/movie.mp4
 ```
+
+#### Windows video
+
+The GPUI that GPUI-Kit 0.8 builds on cannot draw a Direct3D texture from another device on Windows. Until it can, Windows video comes from a fork of its two crates, [`vegidio/gpui-pre`](https://github.com/vegidio/gpui-pre), which adds that and nothing else (`Window::paint_surface` for a shared texture). An app that builds for Windows:
+
+1. Patches GPUI in its **workspace root** `Cargo.toml`. Cargo applies only the root's patches, never a dependency's, so `player-gpui` cannot do this for the app:
+
+   ```toml
+   [patch.crates-io]
+   gpui-pre = { git = "https://github.com/vegidio/gpui-pre", tag = "0.3.10-surfaces.1" }
+   gpui-pre-windows = { git = "https://github.com/vegidio/gpui-pre", tag = "0.3.10-surfaces.1" }
+   ```
+
+2. Stays on GPUI-Kit's default backend (`gpui-pre`). The `gpui-fast` backend is not covered: with it, `player-gpui` does not build on Windows.
+
+- **Without the patch**, the build fails, and the first error is ``cannot find value `WINDOWS_SURFACES_REQUIRE_PATCHED_GPUI` in crate `gpui_kit` ``. The same happens when GPUI-Kit moves to a GPUI version the fork has no tag for, as Cargo then ignores the patch with only a warning.
+- **Only Windows needs the patch.** On macOS and Linux, apps build against the unmodified GPUI.
+- **Graphics drivers.** The video goes from mpv to the window without a copy through the CPU, through the core's `player::windows::SurfaceRenderer` (see [Rendering video](#rendering-video)), so its requirements apply: an OpenGL driver with `WGL_NV_DX_interop2`, and OpenGL and GPUI on the same GPU, which on hybrid-GPU laptops may mean steering the app to one GPU. Where this fails, or GPUI cannot open a frame, the element is black, one warning is logged, and audio and the controls keep working.
+- **Verified** on NVIDIA (GeForce RTX 5090). AMD, Intel and Windows arm64 are unverified.
+- **Release builds** compile GPUI's shaders, the fork's among them, with `fxc.exe` from the Windows SDK, as stock GPUI already does.
+
+| OS      | Video in `VideoPlayer`                                         |
+|---------|----------------------------------------------------------------|
+| macOS   | ✓                                                              |
+| Windows | with the patch and GPUI-Kit's default backend                  |
+| Linux   | black (audio and controls work)                                |
 
 ### The UI layer
 
@@ -208,7 +234,7 @@ The tests need no media files, display, GPU or sound device: they play media mpv
 
 - **macOS:** Apple's software renderer, built in. Set `PLAYER_TEST_GL=hardware` to run them on the GPU instead. The surface tests (`tests/surface.rs`) and the `player-gpui` tests follow the same setting, and the VideoToolbox test runs only with it.
 - **Linux:** Mesa's EGL and llvmpipe (`sudo apt-get install libegl1 libegl-mesa0 libgl1-mesa-dri`; set `LIBGL_ALWAYS_SOFTWARE=1` to use llvmpipe on a machine with a GPU).
-- **Windows:** the system's OpenGL is version 1.1 without a GPU driver, too old for mpv. CI copies Mesa's `opengl32.dll` and `libgallium_wgl.dll` from [mesa-dist-win](https://github.com/pal1000/mesa-dist-win) next to the test binaries (`target/<triple>/debug/deps`) and sets `GALLIUM_DRIVER=llvmpipe`. Only the tests use them; applications keep using the system's OpenGL. Mesa has no `WGL_NV_DX_interop2`, so the Windows surface tests (`tests/surface/windows.rs`) only check there that building the renderer fails with a clear error, and skip the rest. Run them on a machine with a GPU driver for the full set; `PLAYER_TEST_GL=hardware` adds the NVDEC test.
+- **Windows:** the system's OpenGL is version 1.1 without a GPU driver, too old for mpv. CI copies Mesa's `opengl32.dll` and `libgallium_wgl.dll` from [mesa-dist-win](https://github.com/pal1000/mesa-dist-win) next to the test binaries (`target/<triple>/debug/deps`) and sets `GALLIUM_DRIVER=llvmpipe`. Only the tests use them; applications keep using the system's OpenGL. Mesa has no `WGL_NV_DX_interop2`, so the Windows surface tests (`tests/surface/windows.rs`) only check there that building the renderer fails with a clear error, and skip the rest. Run them on a machine with a GPU driver for the full set; `PLAYER_TEST_GL=hardware` adds the NVDEC test. The same goes for `player-gpui`'s video tests on Windows: on Mesa, only the drawing of a test-made shared texture and the warning for a driver without the interop are checked.
 - **Windows arm64:** no software OpenGL exists (mesa-dist-win builds x64 and x86 only), so CI skips the GL tests, the surface tests among them, there by setting `PLAYER_TEST_SKIP_GL=1`. Rendering on Windows arm64 is therefore not verified by CI; it needs a machine with a GPU driver.
 
 On the first build `crates/player/build.rs` downloads the `binaries-mpv` release pinned in [`crates/player/mpv-version.txt`](crates/player/mpv-version.txt) for the target (35-70 MB) and caches it in Cargo's `OUT_DIR`; later builds reuse it. The link line is derived from the archive's own `lib/pkgconfig/*.pc` files, so no `pkg-config` binary is needed.

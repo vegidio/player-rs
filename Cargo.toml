@@ -9,3 +9,9 @@ license = "Apache-2.0"
 repository = "https://github.com/vegidio/player-rs"
 homepage = "https://github.com/vegidio/player-rs"
 authors = ["Vinicius Egidio <me@vinicius.io>"]
+
+# Windows video surfaces for `player-gpui`: GPUI with `paint_surface` on Windows, used by the example, the tests and CI.
+# Apps that use `player-gpui` on Windows add the same lines (see the README).
+[patch.crates-io]
+gpui-pre = { git = "https://github.com/vegidio/gpui-pre", tag = "0.3.10-surfaces.1" }
+gpui-pre-windows = { git = "https://github.com/vegidio/gpui-pre", tag = "0.3.10-surfaces.1" }
