@@ -1,6 +1,6 @@
 ## 1. Spike (`crates/player`, throwaway branch)
 
-- [ ] 1.1 On a throwaway branch `spike/add-player-8-gbm-dmabuf`, write a throwaway test that runs on the local WSL2 machine after `sudo modprobe vgem`:
+- [x] 1.1 On a throwaway branch `spike/add-player-8-gbm-dmabuf`, write a throwaway test that runs on the local WSL2 machine after `sudo modprobe vgem`:
   - Open the vgem DRM node (render node, or card node if that is all GBM accepts), create a GBM device, an EGL display on `EGL_PLATFORM_GBM_KHR` and a surfaceless GL context. Note the driver Mesa loads, and any override it needs (for example `MESA_LOADER_DRIVER_OVERRIDE=kms_swrast`).
   - Allocate a LINEAR `ABGR8888` buffer, import it as an EGLImage, have mpv render the 160x120 test pattern and solid colour fields into it with `flip_y = false`, and read it back through a second EGL context that imports the same fd.
   - Check that lavapipe imports the same fd through `VK_EXT_external_memory_dma_buf` (input for slice 9).
@@ -61,7 +61,7 @@
   - Otherwise, only the "no render node" and builder tests run, and the gap is recorded in design.md and the README after the user agrees.
 
   Verify: the workflow diff matches the recorded outcome.
-- [ ] 3.2 Run the manual `test` workflow on the change branch. Verify that the lint job and all six legs pass, and record the run id and per-leg test counts in design.md.
+- [x] 3.2 Run the manual `test` workflow on the change branch. Verify that the lint job and all six legs pass, and record the run id and per-leg test counts in design.md.
 
 ## 4. Verification
 
@@ -72,7 +72,7 @@
   - the file descriptor count does not grow over a minute of playback and resizes
 
   Note the Mesa version, kernel and results in design.md, and confirm the README lists hardware as unverified.
-- [ ] 4.2 Run `cargo fmt --check`, `cargo clippy --all-targets` and `cargo test` on Linux (WSL2) and verify they are clean, then confirm macOS and Windows still build in CI, so the change is ready for verification and archive.
+- [x] 4.2 Run `cargo fmt --check`, `cargo clippy --all-targets` and `cargo test` on Linux (WSL2) and verify they are clean, then confirm macOS and Windows still build in CI, so the change is ready for verification and archive.
 
 ## Workflow follow-up
 

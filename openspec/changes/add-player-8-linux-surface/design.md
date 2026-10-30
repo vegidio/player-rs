@@ -277,6 +277,21 @@ WSL2, kernel 6.18.33.2-microsoft-standard-WSL2, Mesa 26.2.5 (kisak PPA), llvmpip
 
 The README lists Linux hardware (Mesa on Intel and AMD, NVIDIA, tiled modifiers, VA-API and NVDEC zero-copy decoding) as unverified.
 
+### 13c. CI run (task 3.2)
+
+Test run 41011751703 on `add-player-8-linux-surface` (commit `48c0552`): Lint, Lint (Windows video) and all six legs pass.
+
+| Leg | Passed | Ignored | Failed |
+|---|---|---|---|
+| macOS arm64 | 243 | 5 | 0 |
+| macOS x64 | 243 | 5 | 0 |
+| Linux x64 | 249 | 5 | 0 |
+| Linux arm64 | 249 | 5 | 0 |
+| Windows x64 | 249 | 5 | 0 |
+| Windows arm64 | 249 | 5 | 0 |
+
+On both Linux legs vgem loads (`card0` 226:0, `renderD128`) and `tests/surface.rs` runs in full: 31 passed in 4.13 s (x64) and 3.54 s (arm64), not the near-instant skip.
+
 ### 14. If the software path does not work
 
 If task 1.1 finds that `vgem` gives no working GBM/EGL path on WSL2, the slice cannot be verified anywhere available. Implementation then stops, and the user decides between real hardware (a native Linux machine, a live USB or a GPU cloud VM) and another approach. This is a gate in task 1.1, not something to work around.
