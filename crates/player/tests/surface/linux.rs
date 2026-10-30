@@ -49,13 +49,6 @@ fn software() -> bool {
     env("LIBGL_ALWAYS_SOFTWARE") == "1" || matches!(env("GALLIUM_DRIVER").as_str(), "llvmpipe" | "softpipe")
 }
 
-/// Bilinear scaling on software OpenGL: mpv's default scaler draws YUV video black or in wrong colours on llvmpipe,
-/// also with a plain render context, while bilinear scaling draws it right (see the design of
-/// `add-player-8-linux-surface`, decision 13a).
-pub(crate) fn software_scaling(builder: PlayerBuilder) -> PlayerBuilder {
-    if software() { builder.mpv_option("scale", "bilinear") } else { builder }
-}
-
 /// Creates a surface renderer for `player`, notifying on the returned channel.
 fn renderer(player: &Player) -> (SurfaceRenderer, Receiver<()>) {
     let (sender, frames) = mpsc::channel();
@@ -708,6 +701,54 @@ fn letterboxing() {
         .flat_map(|x| (0..120).map(move |y| (x, y)))
         .filter(|&(x, y)| !is_black(picture.pixel(x, y)));
     assert!(lit.count() > 152 * 120 / 2, "the video fills the middle");
+}
+
+/// YUV video scaled down keeps its colours on every frame. On Mesa's software renderers, mpv's default scaler draws it
+/// black or in wrong colours in most runs, for the whole run, unless the core picks bilinear scaling.
+#[test]
+fn yuv_colours_scaled_down() {
+    if skipped() {
+        return;
+    }
+    let rig = rig(Autoplay::On);
+    rig.player.set_property("loop-file", "inf".to_string()).unwrap();
+    rig.renderer.set_size(80, 60);
+    let source = FIELDS_SOURCE.replace("[out0]", ",format=yuv420p[out0]");
+    rig.player.load(url(&source)).unwrap();
+    // The first frames may come before the video's.
+    let first = rig.wait_frame("the video at the set size", |frame| {
+        (frame.width(), frame.height()) == (80, 60) && Picture::of(frame).colours() >= 4
+    });
+    let fields: [[u8; 3]; 5] = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 255], [128, 128, 128]];
+    for later in 0..5 {
+        let frame = rig.wait_frame("a newer frame", |frame| frame.sequence() > first.sequence() + 5 * later);
+        let picture = Picture::of(&frame);
+        for (field, expected) in fields.into_iter().enumerate() {
+            let actual = picture.pixel(8 + 16 * field, 30);
+            let close = expected.iter().zip(actual).all(|(e, a)| f64::from(e.abs_diff(a)) <= 0.05 * 255.0);
+            assert!(close, "frame {}, field {field}: {actual:?}, expected {expected:?}", frame.sequence());
+        }
+    }
+}
+
+/// On software renderers the core picks bilinear scaling only for a player that has no scaler of its own.
+#[test]
+fn own_scaler_is_kept_on_software_renderers() {
+    if skipped() || !software() {
+        return;
+    }
+    let default = rig(Autoplay::Off);
+    assert_eq!(default.player.get_property::<String>("scale").unwrap(), "bilinear");
+
+    let player = Player::builder()
+        .video_output(VideoOutput::Render)
+        .mpv_option("ao", "null")
+        .mpv_option("scale", "spline36")
+        .build()
+        .unwrap();
+    let (renderer, frames) = renderer(&player);
+    let own = Rig { renderer, frames, player };
+    assert_eq!(own.player.get_property::<String>("scale").unwrap(), "spline36");
 }
 
 // ------------------------------------------------------------------------------------------------------------------

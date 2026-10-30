@@ -42,10 +42,12 @@ const FIELDS_SOURCE: &str = "av://lavfi:color=c=0xFF0000:s=32x120:r=25:d=30[r];c
 const TIMEOUT: Duration = Duration::from_secs(15);
 
 fn render_player(autoplay: Autoplay) -> Player {
-    let builder = Player::builder().video_output(VideoOutput::Render).autoplay(autoplay).mpv_option("ao", "null");
-    #[cfg(target_os = "linux")]
-    let builder = linux::software_scaling(builder);
-    builder.build().expect("the player builds")
+    Player::builder()
+        .video_output(VideoOutput::Render)
+        .autoplay(autoplay)
+        .mpv_option("ao", "null")
+        .build()
+        .expect("the player builds")
 }
 
 fn url(url: &str) -> Source {

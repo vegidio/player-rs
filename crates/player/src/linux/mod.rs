@@ -50,7 +50,8 @@
 //!   made them. Only layouts with one memory plane are used.
 //! - **Drivers.** The EGL driver needs the GBM platform, `EGL_EXT_image_dma_buf_import(_modifiers)` and
 //!   `EGL_KHR_surfaceless_context`, as Mesa's and NVIDIA's have. Without a DRM device, as on WSL2 by default,
-//!   creation fails with "no DRM render node is available".
+//!   creation fails with "no DRM render node is available". On Mesa's software renderers, mpv scales bilinearly
+//!   unless the player sets `scale` (see [`RenderContext`](crate::RenderContext#software-opengl)).
 //! - **Hardware decoding.** [`VideoOutput::Render`] players default to `hwdec=vaapi,nvdec` on Linux: VA-API (Intel
 //!   and AMD) or NVDEC (NVIDIA), both handing their frames to OpenGL without a copy, and software decoding where
 //!   neither can decode. The renderer gives mpv its DRM node, which VA-API needs. Override it with

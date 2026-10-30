@@ -5,7 +5,7 @@ use crate::error::{Error, Result, mpv_message};
 use crate::mpv::Handle;
 use crate::mpv::render::RawContext;
 use crate::player::Player;
-use std::ffi::{CStr, c_int, c_void};
+use std::ffi::{CStr, c_char, c_int, c_void};
 use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -44,6 +44,12 @@ pub struct RenderTarget {
 /// A render context keeps the player's mpv instance alive, so it may be dropped before or after the last [`Player`]
 /// clone. Dropping the last `Player` stops playback; the instance is released once the render context is dropped too.
 /// Dropping the render context while media plays turns off video, and playback continues without it.
+///
+/// # Software OpenGL
+///
+/// On Mesa's software renderers (llvmpipe, softpipe), mpv's default scaler draws YUV video black or in wrong colours
+/// in most runs, so creating a render context there sets mpv's `scale` option to `bilinear`, unless the application
+/// set `scale` itself with [`PlayerBuilder::mpv_option`](crate::PlayerBuilder::mpv_option).
 pub struct RenderContext {
     // Dropped in declaration order: mpv's render context first, as mpv requires it to be freed before the instance;
     // then the flag, so a new render context can be created; then this reference to the instance.
@@ -91,7 +97,7 @@ impl RenderContext {
     #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
     pub(crate) unsafe fn with_drm_device(
         player: &Player,
-        get_proc_address: impl FnMut(&CStr) -> *const c_void + Send + 'static,
+        mut get_proc_address: impl FnMut(&CStr) -> *const c_void + Send + 'static,
         on_frame: impl Fn() + Send + Sync + 'static,
         drm_render_fd: Option<c_int>,
     ) -> Result<RenderContext> {
@@ -100,6 +106,11 @@ impl RenderContext {
         }
         let active = ActiveFlag::claim(player.render_active())
             .ok_or_else(|| Error::Render("the player already has a render context".into()))?;
+
+        // SAFETY: the caller guarantees the GL context is current, and `get_proc_address` resolves its functions.
+        if unsafe { software_renderer(&mut get_proc_address) } {
+            bilinear_unless_chosen(player);
+        }
 
         // SAFETY: the caller guarantees the GL context is current now and for every later call and the drop, and that
         // the DRM device stays open.
@@ -155,6 +166,44 @@ fn check_target(target: RenderTarget) -> Result<(c_int, c_int, c_int)> {
     }
     let int = |value: u32| c_int::try_from(value).map_err(|_| invalid());
     Ok((int(fbo)?, int(width)?, int(height)?))
+}
+
+/// `GL_RENDERER`.
+const GL_RENDERER: u32 = 0x1F01;
+
+/// Whether the current GL context is one of Mesa's software renderers, llvmpipe or softpipe. `false` when
+/// `glGetString` cannot be resolved, as WGL's loader does for OpenGL 1.1 functions.
+///
+/// # Safety
+///
+/// A GL context must be current, and `get_proc_address` must resolve its functions.
+unsafe fn software_renderer(get_proc_address: &mut impl FnMut(&CStr) -> *const c_void) -> bool {
+    let address = get_proc_address(c"glGetString");
+    if address.is_null() {
+        return false;
+    }
+    // SAFETY: the address of `glGetString`, whose signature this is.
+    let get_string: extern "system" fn(u32) -> *const c_char = unsafe { std::mem::transmute(address) };
+    let renderer = get_string(GL_RENDERER);
+    if renderer.is_null() {
+        return false;
+    }
+    // SAFETY: GL returns a NUL-terminated string that lives as long as the context.
+    let renderer = unsafe { CStr::from_ptr(renderer) }.to_string_lossy();
+    renderer.starts_with("llvmpipe") || renderer.starts_with("softpipe")
+}
+
+/// Sets mpv's `scale` to `bilinear` unless the application chose a scaler: on Mesa's software renderers, mpv's
+/// default draws YUV video black or in wrong colours in most runs. An application's choice is recognised by `scale`
+/// differing from mpv's default.
+fn bilinear_unless_chosen(player: &Player) {
+    let scale = player.get_property::<String>("scale");
+    let default = player.get_property::<String>("option-info/scale/default-value");
+    if let (Ok(scale), Ok(default)) = (scale, default)
+        && scale == default
+    {
+        let _ = player.set_property("scale", "bilinear".to_string());
+    }
 }
 
 /// Marks a player as having a render context, for as long as this value lives.
