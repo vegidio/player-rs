@@ -399,7 +399,7 @@ fn unknown_device() {
     let Err(Error::Render(message)) = result else {
         panic!("a surface renderer was created on a missing device: {result:?}")
     };
-    assert!(message.contains("226:4095") || message.contains(NO_NODE), "{message}");
+    assert!(message.contains("226:4095"), "the error names the device number: {message}");
 
     player.set_volume(0.5).unwrap();
     assert_eq!(player.get_property::<f64>("volume").unwrap(), 50.0, "the player keeps working");

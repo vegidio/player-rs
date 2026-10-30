@@ -91,9 +91,6 @@ impl Gpu {
     /// The node `device`, or the first node that can render with `modifiers`.
     fn select(device: Option<DrmDevice>, modifiers: &[u64]) -> Result<Gpu> {
         let nodes = gbm::nodes();
-        if nodes.is_empty() {
-            return Err(Error::Render("no DRM render node is available".into()));
-        }
         if let Some(device) = device {
             let node = nodes
                 .iter()
@@ -101,6 +98,9 @@ impl Gpu {
                 .ok_or_else(|| Error::Render(format!("no DRM render node has the device number {device}")))?;
             return Gpu::new(node, modifiers)
                 .map_err(|error| Error::Render(format!("{}: {}", node.path.display(), message(error))));
+        }
+        if nodes.is_empty() {
+            return Err(Error::Render("no DRM render node is available".into()));
         }
         let mut failures = vec![];
         for node in &nodes {
@@ -384,6 +384,6 @@ pub(super) mod tests {
             panic!("a GPU was found on {device}")
         };
         let message = message(error);
-        assert!(message.contains("4095:4095") || message == "no DRM render node is available", "{message}");
+        assert!(message.contains("4095:4095"), "{message}");
     }
 }

@@ -30,8 +30,9 @@ pub enum VideoOutput {
     ///
     /// On macOS this also turns on VideoToolbox hardware decoding (`hwdec=videotoolbox`), on Windows mpv's safe
     /// automatic hardware decoding (`hwdec=auto-safe`, NVDEC on NVIDIA GPUs), and on Linux VA-API or NVDEC
-    /// (`hwdec=vaapi,nvdec`: Intel and AMD GPUs, or NVIDIA GPUs), whose frames reach the GPU without a copy. mpv falls back to software decoding by itself where no such decoder can decode a file;
-    /// `mpv_option("hwdec", "no")` turns it off.
+    /// (`hwdec=vaapi,nvdec`: Intel and AMD GPUs, or NVIDIA GPUs), whose frames reach the GPU without a copy. mpv
+    /// falls back to software decoding by itself where no such decoder can decode a file; `mpv_option("hwdec", "no")`
+    /// turns it off.
     Render,
 }
 

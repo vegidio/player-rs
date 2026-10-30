@@ -175,8 +175,7 @@ jobs:
         run: cargo test -p player-rs -p player-gpui --target ${{ matrix.target }}
         env:
           # Linux: Mesa's llvmpipe, also for the surface tests on vgem. Windows: Mesa's llvmpipe rather than its D3D12
-          # driver. Ignored on macOS, where the
-          # tests ask CGL for Apple's software renderer.
+          # driver. Ignored on macOS, where the tests ask CGL for Apple's software renderer.
           LIBGL_ALWAYS_SOFTWARE: "1"
           GALLIUM_DRIVER: llvmpipe
           PLAYER_TEST_SKIP_GL: ${{ matrix.skip_gl && '1' || '' }}
