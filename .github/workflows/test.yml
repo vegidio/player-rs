@@ -67,12 +67,14 @@ jobs:
       - name: Build error without the patched GPUI
         run: |
           sed -i '/^\[patch.crates-io\]/,/^$/{/^gpui-pre/d}' Cargo.toml
-          if cargo check -p player-gpui --message-format short 2> check.log; then
+          if cargo check -p player-gpui --message-format short --color never 2> check.log; then
             echo "player-gpui built without the patched GPUI" && exit 1
           fi
-          first=$(grep -m1 ': error' check.log)
-          echo "$first"
-          [[ "$first" == *LINUX_SURFACES_REQUIRE_PATCHED_GPUI* ]]
+          first=$(grep -m1 ': error' check.log || true)
+          echo "first error: $first"
+          if [[ "$first" != *LINUX_SURFACES_REQUIRE_PATCHED_GPUI* ]]; then
+            tail -n 40 check.log && exit 1
+          fi
           git checkout -- Cargo.toml Cargo.lock
 
   # `player-gpui`'s Windows video is Windows-only code, which the Linux lint never compiles.
