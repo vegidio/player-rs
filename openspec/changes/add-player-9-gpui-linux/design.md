@@ -72,7 +72,7 @@ Changes from the plan in slice 8's table:
 - Both backends tested by pixel tests on hardware we have: lavapipe (Vulkan, LINEAR fallback) and llvmpipe (GL).
 
 **Non-Goals:**
-- Any change in `crates/player`.
+- Any change in `crates/player` beyond decision 10, which was added during implementation.
 - Multi-plane layouts, NV12 surfaces on Linux, HDR, explicit sync (`sync_file`), and queue-family ownership transfers beyond what wgpu-hal's import does.
 - A non-LINEAR import without `VK_EXT_image_drm_format_modifier`. Tiled buffers need the modifier extension, and the core's default is LINEAR anyway.
 - The `gpui-fast` backend, and forking `gpui-pre-linux` or `gpui-pre-platform`.
@@ -252,9 +252,10 @@ The same mechanism as Windows (slice 7, decision 6): a marker `const` named in `
   - the cache (`surface_cache.rs`, compiled into the test with `#[path]`): hits, eviction after 8 unused frames, a failed make not kept, a new cache empty (the cache lives in the device's resources, so a device loss drops it)
   - the RGBA shader with a wgpu-made texture wider than the drawn width: colours, the padding never sampled, clipping to the content mask
   - `DmaBufTexture::duplicate` giving an fd that outlives the original (`gpui-pre`'s unit-test target has the same asset problem)
+  - the import (`dma_buf_import.rs`, compiling `dma_buf.rs` with `#[path]`): a `vgem` dumb buffer shaped like the core's (LINEAR, 48 pixels wide in rows of 64) imported along the probed path and drawn with the shader, on every adapter; it skips without `vgem`
 
-  The dma-buf paths are tested from `player-gpui`, which has the producer.
-- **Manual checks (task 5.1)**: `examples/play.rs` in WSLg on WSL2 with `vgem`, on lavapipe and on GL llvmpipe (and on GPUI's `d3d12` GL adapter, expecting black and one warning):
+  The tests share one wgpu instance for the whole run, and draw on each adapter from one test: dropping a GL instance unloads libEGL, after which Mesa's thread-exit destructors crash, and a GL context stays bound to the thread that first made it current. The whole path, with the core as the producer, is tested from `player-gpui`.
+- **Manual checks (task 6.1)**: `examples/play.rs` in WSLg on WSL2 with `vgem`, on lavapipe and on GL llvmpipe (and on GPUI's `d3d12` GL adapter, expecting black and one warning):
   - upright, colours, letterboxing
   - controls over the video, fullscreen, resize
   - no repaint when idle
@@ -286,10 +287,32 @@ Changes made from it: LINEAR imports at the padded width on every path (decision
   - run `player-gpui`'s tests on both backends (decision 8)
 - **Other legs.** Windows and macOS are unchanged, apart from using the new tag.
 
+#### CI run (task 4.2)
+
+Run 41028435517 on `add-player-9-gpui-linux` (`e36047d`): both lint jobs and all six legs passed. `player-gpui` unit tests per leg: Linux x64 and arm64 61 on lavapipe and 61 again on GL llvmpipe (`VK_DRIVER_FILES=/dev/null`); macOS arm64 and x64 56; Windows x64 and arm64 59. On both Linux legs and both backends, the five Linux tests (`frame_is_drawn_upright_and_letterboxed`, `video_is_drawn_upright_in_its_colours_and_letterboxed`, `warns_once_about_a_buffer_it_cannot_import` and the two device-choice tests) report `ok`. The log captures no skip messages, as the tests ran without `--nocapture`; their timings, spread over 1-4 seconds per backend, match the draws running rather than returning early.
+
+### 10. Software OpenGL scaler in the core (added during implementation)
+
+The manual check (task 6.1) found video black in WSLg windows, on lavapipe as well as on GL llvmpipe, with one player and with two, while audio, the controls and the core's playback worked.
+- **Cause.** It is not GPUI's import or paint. The core's own frames are black: a headless repro through GPUI's renderer, and a CPU readback of the core's frames, show them black. It is slice 8's spike finding (13a): mpv's default scaler draws YUV video black, or in wrong colours, on llvmpipe in most runs. The outcome is fixed per process, which made it look intermittent. The tests set `scale=bilinear` on software renderers, but apps did not, and the tests stop at the first good frame.
+- **Measured** in the core's surface tests, five yuv420p colour fields, five frames each over two seconds, four processes per cell, scaled up (320×240) and down (80×60):
+
+  | mpv option | up | down |
+  |---|---|---|
+  | default | 1/4 | 1/4 |
+  | `scale=bilinear` | 4/4 | 4/4 |
+  | `scale`, `dscale`, `cscale` bilinear | 4/4 | 4/4 |
+  | `gpu-dumb-mode=yes` | 4/4 | 4/4 |
+  | `fbo-format=rgba8` | 0/4 (red drawn green) | 1/4 |
+
+  The 1080p H.264 file scaled down to 960×540 drew video 4/4 with `scale=bilinear` and with `gpu-dumb-mode=yes`.
+- **Decision.** `RenderContext::with_drm_device`, which both `RenderContext::new` and the Linux surface renderer call with the GL context current, resolves `glGetString` through the caller's loader and reads `GL_RENDERER`. If it names llvmpipe or softpipe, and mpv's `scale` is still at its default (`option-info/scale/default-value`), it sets `scale=bilinear` before creating mpv's render context. `gpu-dumb-mode` was rejected: it also turns off colour management and tone mapping, which the Linux module docs promise.
+- **Tests.** The core's surface tests drop their own `software_scaling` workaround, so they exercise the default. A new test plays yuv420p fields scaled down and checks every field's colour on several frames, and another checks that an app's own `scale` is kept.
+
 ### Backend / UI separation, threading, lifetimes, zero-copy
 
 - **Separation.**
-  - `crates/player` is not touched, and still has no GUI types.
+  - `crates/player` changes only in decision 10's scaler default, and still has no GUI types.
   - `crates/gpui` gains no EGL, GBM, Vulkan or `unsafe` code, only the cfg'd build and paint. All import code in the UI path is in GPUI's renderer (the fork).
   - A future egui-wgpu crate would call the same wgpu-hal import, or copy the fork's fallback, on `frame.fd()`, and reuse the core unchanged.
 - **GPUI-Kit vs raw GPUI.** GPUI-Kit has no video or surface component, so `paint_surface` and `canvas` are raw GPUI, as on macOS and Windows. The controls stay on GPUI-Kit (slice 5).
@@ -312,6 +335,8 @@ Changes made from it: LINEAR imports at the padded width on every path (decision
 - [The padded width depends on `stride` being a multiple of 4 and the buffer holding `stride * height` bytes] → Both hold for any RGBA buffer by definition of its stride. Otherwise the layout's own width is used.
 - [Mesa 25's software EGL ignores the pitch, and its lavapipe cannot import dma-bufs] → The padded width covers the first. The second leaves lavapipe black on Mesa 25 (one warning); CI uses Mesa 26. Apps on real GPUs use hardware drivers, not these.
 - [GPUI picks `d3d12` GL on WSL2 without `LIBGL_ALWAYS_SOFTWARE`, so such a run is black] → Expected, and covered by the spec's warn-once scenario. GPUI does report an import description there (decision 3), so the Linux tests in both repositories fail on `d3d12` GL rather than skip; they need the `vgem` setup's `LIBGL_ALWAYS_SOFTWARE=1`, with which GPUI picks lavapipe. The README documents steering with `VK_DRIVER_FILES`.
+- [`scale=bilinear` on software renderers is lower quality than mpv's default] → Only on llvmpipe and softpipe, where the default draws black, and only when the app set no scaler. Hardware renderers keep mpv's defaults. Colour management and tone mapping stay on, unlike `gpu-dumb-mode`.
+- [The renderer is identified by its `GL_RENDERER` string] → Mesa names them `llvmpipe (…)` and `softpipe`. A loader that cannot resolve `glGetString` (WGL's for GL 1.1 functions) skips the check, and mpv's defaults stay.
 - [A third-party PPA in CI] → It only replaces Mesa on the test runners, matches the local setup, and is not needed by apps.
 - [Image layout and queue-family ownership of imported memory (`UNDEFINED`, external queue) are not transferred explicitly] → For LINEAR memory written before import, contents are preserved in practice on Mesa, and wgpu-hal's own import does the same. 10+ revisits it on hardware.
 - [The cache keeps evicted buffers' memory for up to 8 frames after a resize] → At most one ring's worth per renderer, briefly. The manual check watches the fd count.

@@ -22,7 +22,7 @@
 ## 3. `crates/gpui` (`player-gpui`)
 
 - [x] 3.1 Set the `video` cfg on Linux in `build.rs`, and move `flume` to Linux too. Add the Linux marker reference in `lib.rs` and the Linux `gpui-pre-wgpu` (`test-support`) dev-dependency (decisions 5, 6 and 7). Verify: `cargo build -p player-gpui` succeeds on Linux. With the `[patch]` temporarily removed, the first Linux error names `LINUX_SURFACES_REQUIRE_PATCHED_GPUI`.
-- [ ] 3.2 Add `video/linux.rs`:
+- [x] 3.2 Add `video/linux.rs`:
   - `build` with GPUI's render node and modifiers, falling back to the core's defaults
   - `paint` through `DmaBufTexture::duplicate`, with warn-once on `dup` failure
 
@@ -54,11 +54,16 @@
   - Windows and macOS use the new tag unchanged.
 
   Verify: the workflow diff matches decision 9, and `actionlint` (or a dry read of the YAML) shows no errors.
-- [ ] 4.2 Run the manual `test` workflow on the change branch. Verify that both lint jobs and all six legs pass. Record in design.md the run id, the per-leg `player-gpui` test counts and which Linux pixel tests ran or skipped on each backend.
+- [x] 4.2 Run the manual `test` workflow on the change branch. Verify that both lint jobs and all six legs pass. Record in design.md the run id, the per-leg `player-gpui` test counts and which Linux pixel tests ran or skipped on each backend.
 
-## 5. Verification
+## 5. Core: software OpenGL scaler (added during implementation, decision 10)
 
-- [ ] 5.1 Manual check in WSLg on WSL2 with `vgem`, with a release build of `examples/play.rs` and a 1080p H.264 file, on lavapipe and on GL llvmpipe:
+- [x] 5.1 In `crates/player`, `RenderContext::with_drm_device` reads `GL_RENDERER` through the caller's loader. On llvmpipe or softpipe, with mpv's `scale` still at its default, it sets `scale=bilinear` before creating mpv's render context. Document it on `RenderContext` and in the Linux module docs. Verify: the existing render and surface tests pass on llvmpipe.
+- [x] 5.2 Drop the surface tests' `software_scaling` workaround, and add two Linux surface tests: yuv420p colour fields scaled down, checked on several frames, and an app's own `scale` kept. Verify: the new colour test fails without 5.1 in most runs (it is decided per process) and passes 10 runs in a row with it (the core renders with GL, so GPUI's backend does not matter here).
+
+## 6. Verification
+
+- [ ] 6.1 Manual check in WSLg on WSL2 with `vgem`, with a release build of `examples/play.rs` and a 1080p H.264 file, on lavapipe and on GL llvmpipe:
   - upright, colours, letterboxing
   - controls over the video, fullscreen, window resize
   - no repaint while paused
@@ -67,7 +72,7 @@
   - the process's fd count flat over a minute with resizes
 
   Also on GPUI's `d3d12` GL adapter (the default without `LIBGL_ALWAYS_SOFTWARE`): black, one warning, and audio and controls working. Record Mesa, kernel and results in design.md.
-- [ ] 5.2 Run `cargo fmt --check`, `cargo clippy --all-targets` and `cargo test` for the workspace on Linux (WSL2, with `vgem`, on both backends) and verify they are clean. Confirm from task 4.2's run that macOS and Windows still build and pass on the new tag, so the change is ready for verification and archive.
+- [ ] 6.2 Run `cargo fmt --check`, `cargo clippy --all-targets` and `cargo test` for the workspace on Linux (WSL2, with `vgem`, on both backends) and verify they are clean. Run the manual `test` workflow on the branch again, since the core changed after task 4.2, and verify that both lint jobs and all six legs pass, so the change is ready for verification and archive. Record the run in design.md.
 
 ## Workflow follow-up
 

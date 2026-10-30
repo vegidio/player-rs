@@ -38,7 +38,7 @@ This is slice 9 of the `add-player` series, the second of the two Linux slices. 
 - **Docs**: the README and the crate docs gain Linux setup (three `[patch]` lines, the `gpui-pre` backend only), the Linux behaviour and gaps, and an updated platform table.
 - **CI**: Linux legs build and test `player-gpui` with the patch, run the pixel tests on GPUI's headless renderer over a dma-buf, and add a Linux clippy step for the new code.
 
-`crates/player` is not touched. Slice 8's `player::linux` API is used as it is.
+- **`crates/player`** (added during implementation, the user's choice): mpv's default scaler draws YUV video black, or in wrong colours, on Mesa's llvmpipe in most runs. Slice 8's spike found this, and the tests work around it, but apps did not. `RenderContext` creation, which the Linux surface renderer also goes through, reads the GL context's renderer. On llvmpipe or softpipe it sets `scale=bilinear` unless the app chose a scaler. Slice 8's `player::linux` API is otherwise used as it is.
 
 ## Capabilities
 
@@ -53,12 +53,13 @@ None.
   - "Windows video setup" becomes "Patched GPUI setup", which covers Windows and Linux.
   - A new requirement, "Linux video unavailable at run time", covers black with one warning when the dma-buf cannot be made or imported.
   - A new requirement, "Render node and layout from GPUI", covers the core renderer following GPUI's device and modifiers.
+- `video-render`: a new requirement, "Correct picture on software OpenGL", covers the scaler chosen on Mesa's software renderers.
 
 ## Impact
 
 - **Crates**:
   - `crates/gpui` gets the Linux video view. It contains only GPUI glue: sizing, frame subscription, the renderer's device and modifiers taken from GPUI, and the `paint_surface` call. There is no EGL, GBM, Vulkan or `unsafe` code in it.
-  - `crates/player` is unchanged. Everything platform-specific stays in the core (slice 8) or in GPUI's renderer (the fork), so a future egui-wgpu crate would reuse the core unchanged and call the same wgpu-hal import.
+  - `crates/player` gains only the software-renderer scaler default, in `RenderContext` creation. Everything platform-specific stays in the core (slice 8) or in GPUI's renderer (the fork), so a future egui-wgpu crate would reuse the core unchanged and call the same wgpu-hal import.
 - **Video.js reference**: the `<video>` area of a Video.js player, letterboxed on black under the control bar, now on Linux as on macOS and Windows.
 - **libmpv APIs**: none new. Slice 8's renderer and its `hwdec=vaapi,nvdec` default are used unchanged.
 - **Linux APIs, all in the fork**:
@@ -80,4 +81,4 @@ None.
   - Only the `gpui-pre` backend is covered. Apps on GPUI-Kit's `gpui-fast` backend fail the build on the marker, as on Windows.
   - macOS still needs no patch.
 - **Outward-facing steps** (each needs the user's go-ahead): pushing the fork's new commits and the `0.3.10-surfaces.2` tag.
-- **Size**: 14 tasks. This is slice 9 of the `add-player` series (see design.md). It depends on slices 5, 7 and 8.
+- **Size**: 17 tasks (two core tasks added during implementation). This is slice 9 of the `add-player` series (see design.md). It depends on slices 5, 7 and 8.
