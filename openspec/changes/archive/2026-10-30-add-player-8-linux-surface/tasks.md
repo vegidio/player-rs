@@ -30,7 +30,7 @@
   - setup with the `DRM_DISPLAY_V2` parameter
   - render, fence and `glClientWaitSync` before publication
   - the ring rebuilt on resize
-  - teardown in the order of decision 11, with the bounded join on drop
+  - teardown in the order of decision 11, with the join on drop (bounded in practice by the fence wait, see decision 2)
   - default node selection by first successful build (decision 6)
 
   Verify: the Linux surface tests for "no size yet", "frames at the set size", "resize while paused" and "nothing loaded" pass on WSL2 with `vgem`.

@@ -64,4 +64,4 @@ None.
   - Linux gets surfaces in the core, but no video in GPUI until slice 9.
   - Verification is software-only (WSL2 with `vgem`, and CI if the spike shows it works there). Real GPUs (Mesa on Intel or AMD, NVIDIA's proprietary driver), their modifiers and VA-API or NVDEC zero-copy decoding are documented as unverified.
   - WSL2's own GPU path (`/dev/dxg`) has no DRM render node, so on WSL2 without `vgem`, creation fails with the "no render node" error.
-- **Size**: 13 tasks. This is slice 8 of the `add-player` series (see design.md). It depends on slices 2 and 6.
+- **Size**: 14 tasks. This is slice 8 of the `add-player` series (see design.md). It depends on slices 2 and 6.

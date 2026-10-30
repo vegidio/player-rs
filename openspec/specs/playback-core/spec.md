@@ -6,7 +6,7 @@ Defines the toolkit-agnostic player that every frontend drives: how it is create
 
 ### Requirement: Player creation with validated options
 
-The core crate SHALL create a player from a builder that accepts the initial autoplay mode, volume, mute state, video output and raw mpv options. The video output SHALL be either none, or rendering by the application through a render context (see the `video-render` capability) or a surface renderer (see the `video-surface` capability). Building SHALL fail with a descriptive error, and create no player, when a value is invalid or mpv cannot be initialised. Unset values SHALL default to autoplay off, volume 1.0, unmuted and no video output. On macOS, a player built with the render video output SHALL use VideoToolbox hardware decoding unless a raw mpv option sets the hardware decoding mode. On Windows, a player built with the render video output SHALL use mpv's safe automatic hardware decoding mode (`auto-safe`) unless a raw mpv option sets the hardware decoding mode. On Linux, and with no video output on any platform, hardware decoding SHALL stay off unless a raw mpv option turns it on.
+The core crate SHALL create a player from a builder that accepts the initial autoplay mode, volume, mute state, video output and raw mpv options. The video output SHALL be either none, or rendering by the application through a render context (see the `video-render` capability) or a surface renderer (see the `video-surface` capability). Building SHALL fail with a descriptive error, and create no player, when a value is invalid or mpv cannot be initialised. Unset values SHALL default to autoplay off, volume 1.0, unmuted and no video output. On macOS, a player built with the render video output SHALL use VideoToolbox hardware decoding unless a raw mpv option sets the hardware decoding mode. On Windows, a player built with the render video output SHALL use mpv's safe automatic hardware decoding mode (`auto-safe`), and on Linux VA-API or NVDEC hardware decoding, in that order (`vaapi,nvdec`), unless a raw mpv option sets the hardware decoding mode. With no video output on any platform, hardware decoding SHALL stay off unless a raw mpv option turns it on.
 
 #### Scenario: Default player
 - **WHEN** a player is built without setting any option
@@ -36,12 +36,16 @@ The core crate SHALL create a player from a builder that accepts the initial aut
 - **WHEN** a player is built on Windows with the render video output and no raw hardware decoding option
 - **THEN** mpv's hardware decoding mode is `auto-safe`
 
+#### Scenario: Hardware decoding default on Linux
+- **WHEN** a player is built on Linux with the render video output and no raw hardware decoding option
+- **THEN** mpv's hardware decoding mode is `vaapi,nvdec`
+
 #### Scenario: Hardware decoding overridden
 - **WHEN** a player is built with the render video output and the raw mpv option `hwdec` set to `no`
 - **THEN** mpv's hardware decoding mode is `no` on every platform
 
 #### Scenario: Hardware decoding elsewhere
-- **WHEN** a player is built with no video output on any platform, or with the render video output on Linux, without a raw hardware decoding option
+- **WHEN** a player is built with no video output on any platform, without a raw hardware decoding option
 - **THEN** mpv's hardware decoding mode is `no`
 
 ### Requirement: Shareable player handle

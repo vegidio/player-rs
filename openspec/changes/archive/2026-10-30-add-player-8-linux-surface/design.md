@@ -124,7 +124,7 @@ exit:  drop RenderContext (GL current) -> delete FBOs and textures -> eglDestroy
        -> eglTerminate -> gbm_device_destroy -> close the node fd
 ```
 
-- **This is the macOS loop.** Like macOS, and unlike Windows, there is no extra target or GPU copy, because mpv draws straight into the shared buffer. The signals, the bounded join on drop and `report_swap` after publication carry over through the shared `surface` module.
+- **This is the macOS loop.** Like macOS, and unlike Windows, there is no extra target or GPU copy, because mpv draws straight into the shared buffer. The signals and `report_swap` after publication carry over through the shared `surface` module. Drop joins the render thread as macOS does, with no timeout of its own: the join is bounded in practice by the 1 s fence wait and mpv's render call (24-236 ms measured while playing, see 13b).
 - **Threads are not pooled.** The Windows pool works around a specific NVIDIA WGL deadlock. Nothing similar is known for EGL on Linux, and it cannot be tested locally. If it shows up on hardware later, the Windows pool can be reused.
 - **Orientation.** In an EGLImage-backed texture, texel row 0 is the dma-buf's first row. GL writes image row 0 at the texture origin, so `flip_y = false` should give a buffer whose first row is the top, as with IOSurface and the D3D interop. Task 1.1 confirms it.
 
