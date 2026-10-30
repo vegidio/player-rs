@@ -47,9 +47,11 @@ pub struct RenderTarget {
 ///
 /// # Software OpenGL
 ///
-/// On Mesa's software renderers (llvmpipe, softpipe), mpv's default scaler draws YUV video black or in wrong colours
-/// in most runs, so creating a render context there sets mpv's `scale` option to `bilinear`, unless the application
-/// set `scale` itself with [`PlayerBuilder::mpv_option`](crate::PlayerBuilder::mpv_option).
+/// On Mesa's software renderers (llvmpipe, softpipe), mpv's rendering draws YUV video black, in wrong colours or
+/// crossed by black lines in many runs, so creating a render context there sets mpv's `gpu-dumb-mode` option to `yes`:
+/// plain scaling and colour conversion, without colour management or HDR tone mapping. It is left alone when the
+/// application set `gpu-dumb-mode` or `scale` itself with
+/// [`PlayerBuilder::mpv_option`](crate::PlayerBuilder::mpv_option).
 pub struct RenderContext {
     // Dropped in declaration order: mpv's render context first, as mpv requires it to be freed before the instance;
     // then the flag, so a new render context can be created; then this reference to the instance.
@@ -109,7 +111,7 @@ impl RenderContext {
 
         // SAFETY: the caller guarantees the GL context is current, and `get_proc_address` resolves its functions.
         if unsafe { software_renderer(&mut get_proc_address) } {
-            bilinear_unless_chosen(player);
+            dumb_mode_unless_chosen(player);
         }
 
         // SAFETY: the caller guarantees the GL context is current now and for every later call and the drop, and that
@@ -193,16 +195,17 @@ unsafe fn software_renderer(get_proc_address: &mut impl FnMut(&CStr) -> *const c
     renderer.starts_with("llvmpipe") || renderer.starts_with("softpipe")
 }
 
-/// Sets mpv's `scale` to `bilinear` unless the application chose a scaler: on Mesa's software renderers, mpv's
-/// default draws YUV video black or in wrong colours in most runs. An application's choice is recognised by `scale`
-/// differing from mpv's default.
-fn bilinear_unless_chosen(player: &Player) {
-    let scale = player.get_property::<String>("scale");
-    let default = player.get_property::<String>("option-info/scale/default-value");
-    if let (Ok(scale), Ok(default)) = (scale, default)
-        && scale == default
-    {
-        let _ = player.set_property("scale", "bilinear".to_string());
+/// Sets mpv's `gpu-dumb-mode` to `yes` unless the application set it or `scale`: on Mesa's software renderers, mpv's
+/// default rendering draws YUV video black, in wrong colours or crossed by black lines in many runs, and so does
+/// bilinear scaling. An application's choice is recognised by an option differing from mpv's default.
+fn dumb_mode_unless_chosen(player: &Player) {
+    let at_default = |name: &str| {
+        let value = player.get_property::<String>(name);
+        let default = player.get_property::<String>(&format!("option-info/{name}/default-value"));
+        matches!((value, default), (Ok(value), Ok(default)) if value == default)
+    };
+    if at_default("gpu-dumb-mode") && at_default("scale") {
+        let _ = player.set_property("gpu-dumb-mode", "yes".to_string());
     }
 }
 

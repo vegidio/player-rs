@@ -703,8 +703,9 @@ fn letterboxing() {
     assert!(lit.count() > 152 * 120 / 2, "the video fills the middle");
 }
 
-/// YUV video scaled down keeps its colours on every frame. On Mesa's software renderers, mpv's default scaler draws it
-/// black or in wrong colours in most runs, for the whole run, unless the core picks bilinear scaling.
+/// YUV video scaled down by an uneven factor keeps its colours over the whole picture on every frame. On Mesa's
+/// software renderers, mpv's default rendering draws it black or in wrong colours, and bilinear scaling sometimes
+/// black or crossed by black lines, for the whole run, unless the core puts mpv in its dumb mode.
 #[test]
 fn yuv_colours_scaled_down() {
     if skipped() {
@@ -712,43 +713,55 @@ fn yuv_colours_scaled_down() {
     }
     let rig = rig(Autoplay::On);
     rig.player.set_property("loop-file", "inf".to_string()).unwrap();
-    rig.renderer.set_size(80, 60);
+    // The 160x120 fields at about 0.73: 117x88, with less than a pixel of bar at each side.
+    let (width, height) = (118, 88);
+    rig.renderer.set_size(width, height);
     let source = FIELDS_SOURCE.replace("[out0]", ",format=yuv420p[out0]");
     rig.player.load(url(&source)).unwrap();
     // The first frames may come before the video's.
     let first = rig.wait_frame("the video at the set size", |frame| {
-        (frame.width(), frame.height()) == (80, 60) && Picture::of(frame).colours() >= 4
+        (frame.width(), frame.height()) == (width, height) && Picture::of(frame).colours() >= 4
     });
     let fields: [[u8; 3]; 5] = [[255, 0, 0], [0, 255, 0], [0, 0, 255], [255, 255, 255], [128, 128, 128]];
     for later in 0..5 {
         let frame = rig.wait_frame("a newer frame", |frame| frame.sequence() > first.sequence() + 5 * later);
         let picture = Picture::of(&frame);
         for (field, expected) in fields.into_iter().enumerate() {
-            let actual = picture.pixel(8 + 16 * field, 30);
+            let actual = picture.pixel(117 * (2 * field + 1) / 10, 44);
             let close = expected.iter().zip(actual).all(|(e, a)| f64::from(e.abs_diff(a)) <= 0.05 * 255.0);
             assert!(close, "frame {}, field {field}: {actual:?}, expected {expected:?}", frame.sequence());
+        }
+        // No field is black, nor is any blend of two.
+        for y in 2..height as usize - 2 {
+            for x in 2..width as usize - 2 {
+                let pixel = picture.pixel(x, y);
+                assert!(!is_black(pixel), "frame {}: ({x}, {y}) is black", frame.sequence());
+            }
         }
     }
 }
 
-/// On software renderers the core picks bilinear scaling only for a player that has no scaler of its own.
+/// On software renderers the core puts mpv in its dumb mode only for a player that set neither it nor a scaler.
 #[test]
-fn own_scaler_is_kept_on_software_renderers() {
+fn own_rendering_options_are_kept_on_software_renderers() {
     if skipped() || !software() {
         return;
     }
     let default = rig(Autoplay::Off);
-    assert_eq!(default.player.get_property::<String>("scale").unwrap(), "bilinear");
+    assert_eq!(default.player.get_property::<String>("gpu-dumb-mode").unwrap(), "yes");
 
-    let player = Player::builder()
-        .video_output(VideoOutput::Render)
-        .mpv_option("ao", "null")
-        .mpv_option("scale", "spline36")
-        .build()
-        .unwrap();
-    let (renderer, frames) = renderer(&player);
-    let own = Rig { renderer, frames, player };
-    assert_eq!(own.player.get_property::<String>("scale").unwrap(), "spline36");
+    for (name, value) in [("scale", "spline36"), ("gpu-dumb-mode", "no")] {
+        let player = Player::builder()
+            .video_output(VideoOutput::Render)
+            .mpv_option("ao", "null")
+            .mpv_option(name, value)
+            .build()
+            .unwrap();
+        let (renderer, frames) = renderer(&player);
+        let own = Rig { renderer, frames, player };
+        assert_eq!(own.player.get_property::<String>(name).unwrap(), value);
+        assert_ne!(own.player.get_property::<String>("gpu-dumb-mode").unwrap(), "yes", "with {name}={value}");
+    }
 }
 
 // ------------------------------------------------------------------------------------------------------------------

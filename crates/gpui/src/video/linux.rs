@@ -134,7 +134,6 @@ mod tests {
             .video_output(VideoOutput::Render)
             .autoplay(Autoplay::On)
             .mpv_option("ao", "null")
-            .mpv_option("scale", "bilinear")
             .build()
             .unwrap();
         player.load(Source::url(source).unwrap()).unwrap();
