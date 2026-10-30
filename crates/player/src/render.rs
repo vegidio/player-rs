@@ -197,9 +197,13 @@ unsafe fn software_renderer(get_proc_address: &mut impl FnMut(&CStr) -> *const c
 
 /// Sets mpv's `gpu-dumb-mode` to `yes` unless the application set it or `scale`: on Mesa's software renderers, mpv's
 /// default rendering draws YUV video black, in wrong colours or crossed by black lines in many runs, and so does
-/// bilinear scaling. An application's choice is recognised by an option differing from mpv's default.
+/// bilinear scaling. An application's choice is an option it set when building the player, even to mpv's default, or
+/// one it changed since.
 fn dumb_mode_unless_chosen(player: &Player) {
     let at_default = |name: &str| {
+        if player.sets_option(name) {
+            return false;
+        }
         let value = player.get_property::<String>(name);
         let default = player.get_property::<String>(&format!("option-info/{name}/default-value"));
         matches!((value, default), (Ok(value), Ok(default)) if value == default)

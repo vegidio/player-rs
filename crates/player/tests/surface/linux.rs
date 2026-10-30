@@ -741,7 +741,8 @@ fn yuv_colours_scaled_down() {
     }
 }
 
-/// On software renderers the core puts mpv in its dumb mode only for a player that set neither it nor a scaler.
+/// On software renderers the core puts mpv in its dumb mode only for a player that set neither it nor a scaler, even
+/// to mpv's default.
 #[test]
 fn own_rendering_options_are_kept_on_software_renderers() {
     if skipped() || !software() {
@@ -749,8 +750,9 @@ fn own_rendering_options_are_kept_on_software_renderers() {
     }
     let default = rig(Autoplay::Off);
     assert_eq!(default.player.get_property::<String>("gpu-dumb-mode").unwrap(), "yes");
+    let default_scale = default.player.get_property::<String>("option-info/scale/default-value").unwrap();
 
-    for (name, value) in [("scale", "spline36"), ("gpu-dumb-mode", "no")] {
+    for (name, value) in [("scale", "spline36"), ("scale", default_scale.as_str()), ("gpu-dumb-mode", "no")] {
         let player = Player::builder()
             .video_output(VideoOutput::Render)
             .mpv_option("ao", "null")

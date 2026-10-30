@@ -172,7 +172,8 @@ impl PlayerBuilder {
             video_size: None,
             buffered: None,
         };
-        Player::start(mpv, state, self.autoplay, self.video_output)
+        let mpv_options = self.mpv_options.into_iter().map(|(name, _)| name).collect();
+        Player::start(mpv, state, self.autoplay, self.video_output, mpv_options)
     }
 }
 

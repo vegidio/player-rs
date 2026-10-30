@@ -40,6 +40,8 @@ struct Inner {
     /// Set while a render context exists. Shared with it rather than kept here alone, so a render context that
     /// outlives the player does not keep the event thread and subscribers alive.
     render_active: Arc<AtomicBool>,
+    /// The names of the options the application set with [`PlayerBuilder::mpv_option`](crate::PlayerBuilder::mpv_option).
+    mpv_options: Vec<String>,
     thread: Option<JoinHandle<()>>,
 }
 
@@ -72,7 +74,13 @@ impl Player {
     }
 
     /// Wraps an initialised instance: observes its properties and starts the event thread.
-    pub(crate) fn start(mpv: Handle, state: State, autoplay: Autoplay, video_output: VideoOutput) -> Result<Self> {
+    pub(crate) fn start(
+        mpv: Handle,
+        state: State,
+        autoplay: Autoplay,
+        video_output: VideoOutput,
+        mpv_options: Vec<String>,
+    ) -> Result<Self> {
         event::observe(&mpv, video_output == VideoOutput::Render).map_err(Error::Init)?;
 
         let mpv = Arc::new(mpv);
@@ -86,7 +94,7 @@ impl Player {
         };
 
         let render_active = Arc::new(AtomicBool::new(false));
-        let inner = Inner { mpv, shared, autoplay, video_output, render_active, thread: Some(thread) };
+        let inner = Inner { mpv, shared, autoplay, video_output, render_active, mpv_options, thread: Some(thread) };
         Ok(Self { inner: Arc::new(inner) })
     }
 
@@ -106,6 +114,11 @@ impl Player {
 
     pub(crate) fn video_output(&self) -> VideoOutput {
         self.inner.video_output
+    }
+
+    /// Whether the application set mpv's option `name` when building the player, also as `no-<name>`.
+    pub(crate) fn sets_option(&self, name: &str) -> bool {
+        self.inner.mpv_options.iter().any(|set| set == name || set.strip_prefix("no-") == Some(name))
     }
 
     /// Set while the player has a render context.
