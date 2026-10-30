@@ -167,6 +167,14 @@ impl Buffer {
                 GBM_BO_USE_RENDERING,
             )
         };
+        // A driver without modifier support reports none for the buffer (DRM_FORMAT_MOD_INVALID, as Mesa's software
+        // driver does), so its layout is unknown; where linear is allowed, ask for that explicitly instead.
+        // SAFETY: the bo is checked to be non-null first.
+        if !bo.is_null() && modifiers.contains(&LINEAR) && unsafe { gbm_bo_get_modifier(bo) } == INVALID {
+            // SAFETY: the bo is valid and not used afterwards.
+            unsafe { gbm_bo_destroy(bo) };
+            bo = std::ptr::null_mut();
+        }
         let mut fallback = false;
         if bo.is_null() && modifiers.contains(&LINEAR) {
             // Drivers without modifier support allocate linear buffers through the older entry point.

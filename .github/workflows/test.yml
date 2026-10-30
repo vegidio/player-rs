@@ -129,6 +129,16 @@ jobs:
           sudo apt-get update && sudo apt-get install -y --no-install-recommends
           ${{ env.LINUX_DEV_PACKAGES }} ${{ env.LINUX_GL_PACKAGES }}
 
+      # A DRM device for the Linux surface tests (`tests/surface/linux.rs`): the kernel's virtual GEM driver, on which
+      # Mesa's llvmpipe allocates dma-bufs through its card node. The runners' kernel ships it; the modules package is
+      # only a fallback.
+      - name: Load vgem (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo modprobe vgem || { sudo apt-get install -y "linux-modules-extra-$(uname -r)" && sudo modprobe vgem; }
+          sudo chmod 666 /dev/dri/*
+          ls -l /dev/dri
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -164,7 +174,8 @@ jobs:
       - name: Test
         run: cargo test -p player-rs -p player-gpui --target ${{ matrix.target }}
         env:
-          # Linux: Mesa's llvmpipe. Windows: Mesa's llvmpipe rather than its D3D12 driver. Ignored on macOS, where the
+          # Linux: Mesa's llvmpipe, also for the surface tests on vgem. Windows: Mesa's llvmpipe rather than its D3D12
+          # driver. Ignored on macOS, where the
           # tests ask CGL for Apple's software renderer.
           LIBGL_ALWAYS_SOFTWARE: "1"
           GALLIUM_DRIVER: llvmpipe

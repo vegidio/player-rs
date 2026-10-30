@@ -56,7 +56,7 @@
 
 ## 3. CI
 
-- [ ] 3.1 Wire the Linux legs to task 1.1's outcome:
+- [x] 3.1 Wire the Linux legs to task 1.1's outcome:
   - If `vgem` works on the runners, load it (and install its modules package if needed) before the tests, so the full Linux surface section runs.
   - Otherwise, only the "no render node" and builder tests run, and the gap is recorded in design.md and the README after the user agrees.
 
