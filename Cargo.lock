@@ -2761,7 +2761,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre"
 version = "0.3.10"
-source = "git+https://github.com/vegidio/gpui-pre?tag=0.3.10-surfaces.1#772572de23bc68abe92e995a60d26e4e7ad3fd47"
+source = "git+https://github.com/vegidio/gpui-pre?tag=0.3.10-surfaces.2#6468b4370c14b33a191270ff0e12d7977c88d51c"
 dependencies = [
  "accesskit",
  "anyhow",
@@ -3188,18 +3188,21 @@ dependencies = [
 [[package]]
 name = "gpui-pre-wgpu"
 version = "0.3.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ce693915768aae38bf788f245af75aae78e3e1179245860fc80ce831d0a8f74e"
+source = "git+https://github.com/vegidio/gpui-pre?tag=0.3.10-surfaces.2#6468b4370c14b33a191270ff0e12d7977c88d51c"
 dependencies = [
  "anyhow",
+ "ash",
  "bytemuck",
  "cosmic-text",
  "etagere",
+ "glow 0.17.0",
  "gpui-pre",
  "gpui-pre-collections",
  "gpui-pre-util",
  "image",
  "itertools 0.14.0",
+ "khronos-egl",
+ "libc",
  "log",
  "parking_lot",
  "profiling",
@@ -3216,7 +3219,7 @@ dependencies = [
 [[package]]
 name = "gpui-pre-windows"
 version = "0.3.10"
-source = "git+https://github.com/vegidio/gpui-pre?tag=0.3.10-surfaces.1#772572de23bc68abe92e995a60d26e4e7ad3fd47"
+source = "git+https://github.com/vegidio/gpui-pre?tag=0.3.10-surfaces.2#6468b4370c14b33a191270ff0e12d7977c88d51c"
 dependencies = [
  "accesskit",
  "accesskit_windows",
@@ -5367,6 +5370,7 @@ version = "26.10.0"
 dependencies = [
  "flume",
  "gpui-kit",
+ "gpui-pre-wgpu",
  "gpui-pre-windows",
  "log",
  "player-rs",

@@ -24,10 +24,10 @@ gpui-kit = { version = "0.8.1", default-features = false, features = ["component
 # Logging of requests mpv rejects, and of video that cannot be shown: GPUI's own logging facade.
 log = "0.4"
 
-# The video element's frame subscription, on macOS and Windows. Windows video needs GPUI patched with Windows surfaces
-# (see the README's "Windows video"); without the patch, the build fails with an error naming
-# `WINDOWS_SURFACES_REQUIRE_PATCHED_GPUI`.
-[target.'cfg(any(target_os = "macos", windows))'.dependencies]
+# The video element's frame subscription, on macOS, Windows and Linux. Windows and Linux video need GPUI patched with
+# video surfaces (see the README's "Windows video" and "Linux video"); without the patch, the build fails with an error
+# naming `WINDOWS_SURFACES_REQUIRE_PATCHED_GPUI` or `LINUX_SURFACES_REQUIRE_PATCHED_GPUI`.
+[target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 flume = "0.12"
 
 [dev-dependencies]
@@ -49,3 +49,8 @@ windows = { version = "0.62", features = [
     "Win32_Graphics_Dxgi_Common",
 ] }
 gpui-pre-windows = { version = "=0.3.10", features = ["test-support"] }
+
+# The Linux video tests: GPUI's headless wgpu renderer, whose dma-buf import only the patched `gpui-pre-wgpu` has. It is
+# already in the graph.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+gpui-pre-wgpu = { version = "=0.3.10", features = ["test-support"] }

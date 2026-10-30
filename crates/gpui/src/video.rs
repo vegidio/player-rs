@@ -1,4 +1,4 @@
-//! The view that draws a player's video surfaces with `paint_surface`: on macOS and Windows.
+//! The view that draws a player's video surfaces with `paint_surface`: on macOS, Windows and Linux.
 //! Only building the renderer and the paint call differ per platform, in `surface`.
 
 use gpui_kit::*;
@@ -10,6 +10,7 @@ use surface::{Frame, SurfaceRenderer};
 
 #[cfg_attr(target_os = "macos", path = "video/macos.rs")]
 #[cfg_attr(windows, path = "video/windows.rs")]
+#[cfg_attr(target_os = "linux", path = "video/linux.rs")]
 mod surface;
 
 /// Owns the player's surface renderer and repaints when it publishes a frame. Kept in the element's keyed state (see
@@ -167,15 +168,31 @@ pub(crate) mod tests {
         })
     }
 
-    /// Whether this machine cannot show video, so the tests that need frames return early: GL tests are skipped, or,
-    /// on Windows, the OpenGL driver cannot share textures with Direct3D 11.
+    /// Whether no DRM render node can be rendered on, as on WSL2 without `vgem`, so no renderer can be built.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn no_render_node() -> bool {
+        static NO_NODE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *NO_NODE.get_or_init(|| {
+            let player = Player::builder().video_output(VideoOutput::Render).mpv_option("ao", "null").build().unwrap();
+            match surface::build(&player, || {}) {
+                Ok(_) => false,
+                Err(Error::Render(message)) if message.contains("DRM render node is available") => true,
+                Err(error) => panic!("the surface renderer cannot be created: {error}"),
+            }
+        })
+    }
+
+    /// Whether this machine cannot show video, so the tests that need frames return early: GL tests are skipped, on
+    /// Windows the OpenGL driver cannot share textures with Direct3D 11, or on Linux no render node is usable.
     pub(crate) fn cannot_show_video() -> bool {
         let reason = if gl_skipped() {
             Some("PLAYER_TEST_SKIP_GL is set, so no OpenGL context is created")
         } else {
             #[cfg(windows)]
             let reason = no_interop().then_some("the OpenGL driver cannot share textures with Direct3D 11");
-            #[cfg(not(windows))]
+            #[cfg(target_os = "linux")]
+            let reason = no_render_node().then_some("no usable DRM render node is available (sudo modprobe vgem)");
+            #[cfg(not(any(windows, target_os = "linux")))]
             let reason = None;
             reason
         };
@@ -423,7 +440,7 @@ pub(crate) mod tests {
     }
 
     /// Warnings logged on this thread since the last call, for the tests that count them.
-    #[cfg(windows)]
+    #[cfg(any(windows, target_os = "linux"))]
     pub(crate) fn take_warnings() -> Vec<String> {
         struct Capture;
 

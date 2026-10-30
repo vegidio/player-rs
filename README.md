@@ -4,7 +4,7 @@ A fast, user-friendly video player for Rust, built on [libmpv](https://mpv.io). 
 
 libmpv and everything it depends on (FFmpeg, libplacebo, libass, …) are linked **statically** from the prebuilt archives of [vegidio/binaries-mpv](https://github.com/vegidio/binaries-mpv). Programs built with `player-rs` need neither mpv nor FFmpeg installed.
 
-> **Status:** early. `player-rs` plays media and draws its video into an OpenGL framebuffer the application provides, on every supported platform (rendering on Windows arm64 is not verified by CI, see [Building](#building)). On macOS it also renders into IOSurfaces that Metal toolkits can show without a copy, on Windows into Direct3D 11 textures shared through NT handles, and on Linux into dma-bufs that Vulkan and EGL toolkits import (verified with software drivers only). `player-gpui` shows the video in a GPUI window with Video.js's controls, from the toolkit-agnostic `player::ui` layer, on macOS, and on Windows with a patched GPUI (see [Windows video](#windows-video)). Video in GPUI on Linux, and the Video.js menus, captions and poster, come in later changes.
+> **Status:** early. `player-rs` plays media and draws its video into an OpenGL framebuffer the application provides, on every supported platform (rendering on Windows arm64 is not verified by CI, see [Building](#building)). On macOS it also renders into IOSurfaces that Metal toolkits can show without a copy, on Windows into Direct3D 11 textures shared through NT handles, and on Linux into dma-bufs that Vulkan and EGL toolkits import (verified with software drivers only). `player-gpui` shows the video in a GPUI window with Video.js's controls, from the toolkit-agnostic `player::ui` layer, on macOS, and on Windows and Linux with a patched GPUI (see [Patched GPUI](#patched-gpui)). The Video.js menus, captions and poster come in later changes.
 
 ## Workspace
 
@@ -154,7 +154,7 @@ fn main() {
 }
 ```
 
-- **Video** is shown upright and letterboxed on black, at the element's size in device pixels. It repaints for each new frame and not while paused. Video is shown on **macOS**, and on **Windows** with a patched GPUI (see [Windows video](#windows-video)). On Linux, the element is black while audio plays and the controls work.
+- **Video** is shown upright and letterboxed on black, at the element's size in device pixels. It repaints for each new frame and not while paused. Video is shown on **macOS**, and on **Windows** and **Linux** with a patched GPUI (see [Patched GPUI](#patched-gpui)). Where it cannot be shown, the element is black while audio plays and the controls work.
 - **Controls** are Video.js 8's default skin, drawn from `player::ui`: the control bar (play, mute with a volume bar that expands on hover, seek bar with buffered part and hover time, remaining time, a playback-rate button when rates are set, fullscreen), the centred big play button, the loading spinner and the error display. The bar fades out after the inactivity timeout while playing. Clicking the video toggles play and double-clicking toggles fullscreen.
 - **Keyboard**: clicking the player focuses it, and Tab moves through the controls. The `player::ui` hotkeys and seek/volume-bar keys apply as configured; keys the player does not handle, and every key held with Ctrl, Alt or Cmd, go on to the app. The `player_gpui::TogglePlay`, `ToggleMute` and `ToggleFullscreen` actions let app menus drive the focused player.
 - **Controls are on by default.** `.options(...)` takes `player::ui::Options`; for bare video, pass `ui::Options::builder().controls(false).build()?`. As in Video.js, options are read once: when the element's state is created and when it is given a different player. With an aspect ratio set, the element's height follows its width (Video.js's fluid mode).
@@ -168,31 +168,47 @@ Try it with:
 cargo run -p player-gpui --example play -- path/to/movie.mp4
 ```
 
-#### Windows video
+#### Patched GPUI
 
-The GPUI that GPUI-Kit 0.8 builds on cannot draw a Direct3D texture from another device on Windows. Until it can, Windows video comes from a fork of its two crates, [`vegidio/gpui-pre`](https://github.com/vegidio/gpui-pre), which adds that and nothing else (`Window::paint_surface` for a shared texture). An app that builds for Windows:
+The GPUI that GPUI-Kit 0.8 builds on cannot draw a texture from another device on Windows, or a dma-buf on Linux. Until it can, video on those platforms comes from a fork of three of its crates, [`vegidio/gpui-pre`](https://github.com/vegidio/gpui-pre), which adds that and nothing else (`Window::paint_surface` for a shared Direct3D texture or a dma-buf). An app that builds for Windows or Linux:
 
 1. Patches GPUI in its **workspace root** `Cargo.toml`. Cargo applies only the root's patches, never a dependency's, so `player-gpui` cannot do this for the app:
 
    ```toml
    [patch.crates-io]
-   gpui-pre = { git = "https://github.com/vegidio/gpui-pre", tag = "0.3.10-surfaces.1" }
-   gpui-pre-windows = { git = "https://github.com/vegidio/gpui-pre", tag = "0.3.10-surfaces.1" }
+   gpui-pre = { git = "https://github.com/vegidio/gpui-pre", tag = "0.3.10-surfaces.2" }
+   gpui-pre-windows = { git = "https://github.com/vegidio/gpui-pre", tag = "0.3.10-surfaces.2" }
+   gpui-pre-wgpu = { git = "https://github.com/vegidio/gpui-pre", tag = "0.3.10-surfaces.2" }
    ```
 
-2. Stays on GPUI-Kit's default backend (`gpui-pre`). The `gpui-fast` backend is not covered: with it, `player-gpui` does not build on Windows.
+   `gpui-pre` is needed on both platforms, `gpui-pre-windows` for Windows and `gpui-pre-wgpu` for Linux. An app that builds for only one of them may leave the other's line out.
 
-- **Without the patch**, the build fails, and the first error is ``cannot find value `WINDOWS_SURFACES_REQUIRE_PATCHED_GPUI` in crate `gpui_kit` ``. The same happens when GPUI-Kit moves to a GPUI version the fork has no tag for, as Cargo then ignores the patch with only a warning.
-- **Only Windows needs the patch.** On macOS and Linux, apps build against the unmodified GPUI.
+2. Stays on GPUI-Kit's default backend (`gpui-pre`). The `gpui-fast` backend is not covered: with it, `player-gpui` does not build on Windows or Linux.
+
+- **Without the patch**, the build fails, and the first error is ``cannot find value `WINDOWS_SURFACES_REQUIRE_PATCHED_GPUI` in crate `gpui_kit` `` on Windows, or the same for `LINUX_SURFACES_REQUIRE_PATCHED_GPUI` on Linux. The same happens when GPUI-Kit moves to a GPUI version the fork has no tag for, as Cargo then ignores the patch with only a warning.
+- **macOS needs no patch.** There, apps build against the unmodified GPUI.
+
+#### Windows video
+
 - **Graphics drivers.** The video goes from mpv to the window without a copy through the CPU, through the core's `player::windows::SurfaceRenderer` (see [Rendering video](#rendering-video)), so its requirements apply: an OpenGL driver with `WGL_NV_DX_interop2`, and OpenGL and GPUI on the same GPU, which on hybrid-GPU laptops may mean steering the app to one GPU. Where this fails, or GPUI cannot open a frame, the element is black, one warning is logged, and audio and the controls keep working.
 - **Verified** on NVIDIA (GeForce RTX 5090). AMD, Intel and Windows arm64 are unverified.
 - **Release builds** compile GPUI's shaders, the fork's among them, with `fxc.exe` from the Windows SDK, as stock GPUI already does.
 
-| OS      | Video in `VideoPlayer`                                         |
-|---------|----------------------------------------------------------------|
-| macOS   | ✓                                                              |
-| Windows | with the patch and GPUI-Kit's default backend                  |
-| Linux   | black (audio and controls work)                                |
+#### Linux video
+
+- **No copy.** The core's `player::linux::SurfaceRenderer` (see [Rendering video](#rendering-video)) renders into dma-bufs, which GPUI's renderer imports on its own device. When GPUI reports its render node, the renderer runs on it, with the buffer layouts (DRM format modifiers) GPUI can import. Otherwise, or when it cannot run there, it takes the first render node it can use, with linear buffers, which import on any device.
+- **Import paths**, picked per GPUI device:
+  - Vulkan with `VK_EXT_image_drm_format_modifier`, for any modifier the driver lists;
+  - Vulkan without it, for linear buffers only, as on Mesa's lavapipe;
+  - OpenGL, through an EGLImage (`EGL_EXT_image_dma_buf_import`).
+- **Where video cannot be shown** the element is black, one warning is logged, and audio and the controls keep working: without a usable DRM render node (WSL2 without `vgem`), or when GPUI's driver cannot import dma-bufs. On WSL2, that is the case for Mesa's `d3d12` OpenGL driver, which GPUI picks unless `LIBGL_ALWAYS_SOFTWARE=1` is set.
+- **Verified** with software drivers only: lavapipe and llvmpipe, on WSL2 and on CI. Linux GPUs (Mesa on Intel and AMD, NVIDIA's driver) and the modifier import path are unverified.
+
+| OS      | Video in `VideoPlayer`                                                                 |
+|---------|----------------------------------------------------------------------------------------|
+| macOS   | ✓                                                                                      |
+| Windows | with the patch and GPUI-Kit's default backend                                          |
+| Linux   | with the patch and GPUI-Kit's default backend, a DRM render node and a driver that imports dma-bufs |
 
 ### The UI layer
 
@@ -257,6 +273,13 @@ The tests need no media files, display, GPU or sound device: they play media mpv
   sudo modprobe vgem                  # on WSL2, from Windows: wsl -u root -- modprobe vgem
   sudo chmod 666 /dev/dri/*           # or join the video and render groups
   LIBGL_ALWAYS_SOFTWARE=1 cargo test -p player-rs --test surface
+  ```
+
+  `player-gpui`'s video tests draw with GPUI's headless wgpu renderer, on the adapter GPUI picks. Run them once on each backend, steering the adapter with `VK_DRIVER_FILES` (`ZED_DEVICE_ID` cannot tell software adapters apart):
+
+  ```sh
+  LIBGL_ALWAYS_SOFTWARE=1 cargo test -p player-gpui                            # Vulkan: lavapipe
+  VK_DRIVER_FILES=/dev/null LIBGL_ALWAYS_SOFTWARE=1 cargo test -p player-gpui  # OpenGL: llvmpipe
   ```
 
   CI loads `vgem` the same way on its Linux legs, so the whole section runs there. llvmpipe allocates through dumb buffers, which the kernel only allows on `vgem`'s card node, so the renderer uses `card0` there. On WSL2, `LIBGL_ALWAYS_SOFTWARE=1` is required with `vgem` loaded: without it, Mesa picks its D3D12 driver for the node, which cannot allocate the buffers, and the process can crash when the render thread exits. With software OpenGL the tests switch mpv to bilinear scaling, as its default scaler draws YUV video wrongly on llvmpipe. `PLAYER_TEST_GL=hardware` adds the VA-API/NVDEC test, for a machine with a GPU.
