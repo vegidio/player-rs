@@ -238,7 +238,7 @@ The same mechanism as Windows (slice 7, decision 6): a marker `const` named in `
   - **Gate:** if neither backend can import on WSL2, stop and ask the user.
 - **`player-gpui` pixel tests** (`video/linux.rs`, `cfg(test)`), on `WgpuHeadlessRenderer`. Each one returns early with a message when the core renderer cannot be built ("no usable DRM render node") or GPUI reports no import (`dma_buf_import()` is `None`):
   - **Draw path.** A core renderer plays a static four-quadrant lavfi picture. Its frame is painted through `paint_surface` with `fit`, then checked for quadrant colours, placement, black bars, and repeated paints of the same buffer (the cache). This replaces Windows' test-made shared texture, because no test-only dma-buf allocator exists without GBM FFI, and the core already is one.
-  - **Real video.** The solid-colour-fields clip through `VideoPlayer` with controls off, checked within 3%, upright and letterboxed in a 16:9 element, with `scale=bilinear` (slice 8, 13a).
+  - **Real video.** The solid-colour-fields clip through `VideoPlayer` with controls off, checked within 3%, upright and letterboxed in a 16:9 element, on the core's own software-renderer default (decision 10).
   - **Warn once.** A buffer GPUI cannot import is painted for several frames, and exactly one warning is logged. A test-only bad layout (wrong fourcc) makes the import fail on any driver.
 - **The `VideoView` harness tests** now run on Linux. They return early on "no usable DRM render node", as the core tests do.
 - **Both backends on CI and locally.** The Linux test step runs `player-gpui`'s tests twice:
@@ -262,6 +262,15 @@ The same mechanism as Windows (slice 7, decision 6): a marker `const` named in `
   - two players
   - closing while playing
   - the fd count staying flat over a minute (the cache)
+
+#### Manual check results (task 6.1)
+
+WSL2, kernel 6.18.33.2-microsoft-standard-WSL2, Mesa 26.2.5 (kisak PPA), `vgem` (`card0` 226:0 and `renderD128`), WSLg (Wayland), release builds, a 120 s 1920x1080 H.264 + AAC file. The core renders on `card0` with llvmpipe. Two players were checked with a scratch binary that puts two `VideoPlayer`s side by side and prints the process's fd counts.
+- **First round**, on `0.3.10-surfaces.2` before decision 10. lavapipe, one player: upright, colours and letterboxing right; controls over the video, fullscreen, resize and closing while playing right; no repaint while paused. GL llvmpipe: video black, audio and controls working. Two players on lavapipe: both black. The investigation behind decision 10 followed.
+- **With `scale=bilinear`:** lavapipe showed video crossed by black horizontal and vertical lines, also in both players after resizing. GL llvmpipe stayed black.
+- **With `gpu-dumb-mode=yes`** (decision 10): lavapipe and GL llvmpipe, one player each, and two players on lavapipe show the video, and it stays right after resizing. Closing while playing is clean.
+- **fd count**, two players on lavapipe, sampled every 10 s: 94 before the first frames, 108 (26 dma-bufs) once both play, 104 to 108 during resizes, and 108 (26) from 40 s to 70 s. It stays flat.
+- **`d3d12` GL** (no `LIBGL_ALWAYS_SOFTWARE`): black, one warning ("the video cannot be shown: render: no usable DRM render node is available"), playback position advancing and audio on pulse. In a window, GPUI's probe reports that `d3d12` cannot import dma-bufs, and the core cannot allocate on either node without software GL, so the failure comes from building the renderer, not from the first import as decision 3 expects headless. Both are the spec's black-with-one-warning case.
 
 #### Spike outcome (task 1.1)
 
@@ -291,10 +300,10 @@ Changes made from it: LINEAR imports at the padded width on every path (decision
 
 Run 41028435517 on `add-player-9-gpui-linux` (`e36047d`): both lint jobs and all six legs passed. `player-gpui` unit tests per leg: Linux x64 and arm64 61 on lavapipe and 61 again on GL llvmpipe (`VK_DRIVER_FILES=/dev/null`); macOS arm64 and x64 56; Windows x64 and arm64 59. On both Linux legs and both backends, the five Linux tests (`frame_is_drawn_upright_and_letterboxed`, `video_is_drawn_upright_in_its_colours_and_letterboxed`, `warns_once_about_a_buffer_it_cannot_import` and the two device-choice tests) report `ok`. The log captures no skip messages, as the tests ran without `--nocapture`; their timings, spread over 1-4 seconds per backend, match the draws running rather than returning early.
 
-### 10. Software OpenGL scaler in the core (added during implementation)
+### 10. Software OpenGL rendering mode in the core (added during implementation)
 
 The manual check (task 6.1) found video black in WSLg windows, on lavapipe as well as on GL llvmpipe, with one player and with two, while audio, the controls and the core's playback worked.
-- **Cause.** It is not GPUI's import or paint. The core's own frames are black: a headless repro through GPUI's renderer, and a CPU readback of the core's frames, show them black. It is slice 8's spike finding (13a): mpv's default scaler draws YUV video black, or in wrong colours, on llvmpipe in most runs. The outcome is fixed per process, which made it look intermittent. The tests set `scale=bilinear` on software renderers, but apps did not, and the tests stop at the first good frame.
+- **Cause.** It is not GPUI's import or paint. The core's own frames are black: a headless repro through GPUI's renderer, and a CPU readback of the core's frames, show them black. It is slice 8's spike finding (13a): mpv's default scaler draws YUV video black, or in wrong colours, on llvmpipe in most runs. The outcome is fixed per process, which made it look intermittent. The tests set `scale=bilinear` on software renderers, but apps did not, and the tests stop at the first good frame. Their sample points also miss what the second manual check showed: `scale=bilinear` itself draws a grid of black lines, or a black frame, at some sizes.
 - **Measured** in the core's surface tests, five yuv420p colour fields, five frames each over two seconds, four processes per cell, scaled up (320×240) and down (80×60):
 
   | mpv option | up | down |
@@ -305,9 +314,9 @@ The manual check (task 6.1) found video black in WSLg windows, on lavapipe as we
   | `gpu-dumb-mode=yes` | 4/4 | 4/4 |
   | `fbo-format=rgba8` | 0/4 (red drawn green) | 1/4 |
 
-  The 1080p H.264 file scaled down to 960×540 drew video 4/4 with `scale=bilinear` and with `gpu-dumb-mode=yes`.
-- **Decision.** `RenderContext::with_drm_device`, which both `RenderContext::new` and the Linux surface renderer call with the GL context current, resolves `glGetString` through the caller's loader and reads `GL_RENDERER`. If it names llvmpipe or softpipe, and mpv's `scale` is still at its default (`option-info/scale/default-value`), it sets `scale=bilinear` before creating mpv's render context. `gpu-dumb-mode` was rejected: it also turns off colour management and tone mapping, which the Linux module docs promise.
-- **Tests.** The core's surface tests drop their own `software_scaling` workaround, so they exercise the default. A new test plays yuv420p fields scaled down and checks every field's colour on several frames, and another checks that an app's own `scale` is kept.
+  The 1080p H.264 file, read back whole and checked for black pixels inside the picture, three processes per size: `scale=bilinear` drew a black frame at 918×498 once, and a grid and a black frame at 640×360 once each, with 960×540 and 1366×768 clean. `gpu-dumb-mode=yes` was clean 8/8 at 918×498, 640×360 and 500×300, and 3/3 at the other sizes.
+- **Decision.** `RenderContext::with_drm_device`, which both `RenderContext::new` and the Linux surface renderer call with the GL context current, resolves `glGetString` through the caller's loader and reads `GL_RENDERER`. If it names llvmpipe or softpipe, and mpv's `gpu-dumb-mode` and `scale` are still at their defaults (`option-info/<name>/default-value`), it sets `gpu-dumb-mode=yes` before creating mpv's render context. `scale=bilinear` was the first choice, as it keeps colour management and tone mapping, and was replaced after the manual check (task 6.1) showed its black lines. Dumb mode drops both, on software renderers only, and the Linux module docs say so.
+- **Tests.** The core's surface tests drop their own `software_scaling` workaround, so they exercise the default. `player-gpui`'s tests drop their `scale=bilinear` too. A new test plays yuv420p fields scaled down by an uneven factor (to 118×88) and checks every pixel on five frames; it failed 6/6 without the default and passed 10/10 with it. Another checks that an app's own `scale` or `gpu-dumb-mode` is kept.
 
 ### Backend / UI separation, threading, lifetimes, zero-copy
 
@@ -335,7 +344,7 @@ The manual check (task 6.1) found video black in WSLg windows, on lavapipe as we
 - [The padded width depends on `stride` being a multiple of 4 and the buffer holding `stride * height` bytes] → Both hold for any RGBA buffer by definition of its stride. Otherwise the layout's own width is used.
 - [Mesa 25's software EGL ignores the pitch, and its lavapipe cannot import dma-bufs] → The padded width covers the first. The second leaves lavapipe black on Mesa 25 (one warning); CI uses Mesa 26. Apps on real GPUs use hardware drivers, not these.
 - [GPUI picks `d3d12` GL on WSL2 without `LIBGL_ALWAYS_SOFTWARE`, so such a run is black] → Expected, and covered by the spec's warn-once scenario. GPUI does report an import description there (decision 3), so the Linux tests in both repositories fail on `d3d12` GL rather than skip; they need the `vgem` setup's `LIBGL_ALWAYS_SOFTWARE=1`, with which GPUI picks lavapipe. The README documents steering with `VK_DRIVER_FILES`.
-- [`scale=bilinear` on software renderers is lower quality than mpv's default] → Only on llvmpipe and softpipe, where the default draws black, and only when the app set no scaler. Hardware renderers keep mpv's defaults. Colour management and tone mapping stay on, unlike `gpu-dumb-mode`.
+- [Dumb mode drops colour management and HDR tone mapping] → Only on llvmpipe and softpipe, where mpv's default draws black, and only when the app set neither option. Hardware renderers keep mpv's defaults. An app that wants mpv's full pipeline on a software renderer sets `gpu-dumb-mode=no`.
 - [The renderer is identified by its `GL_RENDERER` string] → Mesa names them `llvmpipe (…)` and `softpipe`. A loader that cannot resolve `glGetString` (WGL's for GL 1.1 functions) skips the check, and mpv's defaults stay.
 - [A third-party PPA in CI] → It only replaces Mesa on the test runners, matches the local setup, and is not needed by apps.
 - [Image layout and queue-family ownership of imported memory (`UNDEFINED`, external queue) are not transferred explicitly] → For LINEAR memory written before import, contents are preserved in practice on Mesa, and wgpu-hal's own import does the same. 10+ revisits it on hardware.

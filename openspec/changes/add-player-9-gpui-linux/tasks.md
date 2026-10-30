@@ -58,8 +58,8 @@
 
 ## 5. Core: software OpenGL scaler (added during implementation, decision 10)
 
-- [x] 5.1 In `crates/player`, `RenderContext::with_drm_device` reads `GL_RENDERER` through the caller's loader. On llvmpipe or softpipe, with mpv's `scale` still at its default, it sets `scale=bilinear` before creating mpv's render context. Document it on `RenderContext` and in the Linux module docs. Verify: the existing render and surface tests pass on llvmpipe.
-- [x] 5.2 Drop the surface tests' `software_scaling` workaround, and add two Linux surface tests: yuv420p colour fields scaled down, checked on several frames, and an app's own `scale` kept. Verify: the new colour test fails without 5.1 in most runs (it is decided per process) and passes 10 runs in a row with it (the core renders with GL, so GPUI's backend does not matter here).
+- [x] 5.1 In `crates/player`, `RenderContext::with_drm_device` reads `GL_RENDERER` through the caller's loader. On llvmpipe or softpipe, with mpv's `gpu-dumb-mode` and `scale` still at their defaults, it sets `gpu-dumb-mode=yes` before creating mpv's render context (first `scale=bilinear`, replaced after the manual check showed black lines). Document it on `RenderContext` and in the Linux module docs. Verify: the existing render and surface tests pass on llvmpipe.
+- [x] 5.2 Drop the surface tests' `software_scaling` workaround and `player-gpui`'s `scale=bilinear`, and add two Linux surface tests: yuv420p colour fields scaled down by an uneven factor, every pixel checked on several frames, and an app's own `scale` or `gpu-dumb-mode` kept. Verify: the new colour test fails without 5.1 in most runs (it is decided per process) and passes 10 runs in a row with it (the core renders with GL, so GPUI's backend does not matter here).
 
 ## 6. Verification
 

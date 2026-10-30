@@ -38,7 +38,7 @@ This is slice 9 of the `add-player` series, the second of the two Linux slices. 
 - **Docs**: the README and the crate docs gain Linux setup (three `[patch]` lines, the `gpui-pre` backend only), the Linux behaviour and gaps, and an updated platform table.
 - **CI**: Linux legs build and test `player-gpui` with the patch, run the pixel tests on GPUI's headless renderer over a dma-buf, and add a Linux clippy step for the new code.
 
-- **`crates/player`** (added during implementation, the user's choice): mpv's default scaler draws YUV video black, or in wrong colours, on Mesa's llvmpipe in most runs. Slice 8's spike found this, and the tests work around it, but apps did not. `RenderContext` creation, which the Linux surface renderer also goes through, reads the GL context's renderer. On llvmpipe or softpipe it sets `scale=bilinear` unless the app chose a scaler. Slice 8's `player::linux` API is otherwise used as it is.
+- **`crates/player`** (added during implementation, the user's choice): mpv's default rendering draws YUV video black, or in wrong colours, on Mesa's llvmpipe in most runs, and the tests' `scale=bilinear` workaround sometimes draws it black or crossed by black lines. Slice 8's spike found the first, but apps had no workaround at all. `RenderContext` creation, which the Linux surface renderer also goes through, reads the GL context's renderer. On llvmpipe or softpipe it turns on mpv's `gpu-dumb-mode` unless the app set it or a scaler. Slice 8's `player::linux` API is otherwise used as it is.
 
 ## Capabilities
 
@@ -53,7 +53,7 @@ None.
   - "Windows video setup" becomes "Patched GPUI setup", which covers Windows and Linux.
   - A new requirement, "Linux video unavailable at run time", covers black with one warning when the dma-buf cannot be made or imported.
   - A new requirement, "Render node and layout from GPUI", covers the core renderer following GPUI's device and modifiers.
-- `video-render`: a new requirement, "Correct picture on software OpenGL", covers the scaler chosen on Mesa's software renderers.
+- `video-render`: a new requirement, "Correct picture on software OpenGL", covers mpv's dumb mode on Mesa's software renderers.
 
 ## Impact
 
