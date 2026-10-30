@@ -318,6 +318,57 @@ mod tests {
         }
     }
 
+    /// The element with its controls, which never hide: the control bar is drawn over the video.
+    struct Controlled(Player);
+
+    impl Render for Controlled {
+        fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
+            let options = player::ui::Options::builder().inactivity_timeout(Duration::ZERO).build().unwrap();
+            div().size_full().child(VideoPlayer::new("movie", &self.0).options(options).size_full())
+        }
+    }
+
+    #[test]
+    fn controls_are_drawn_over_the_video() {
+        if cannot_show_video() {
+            return;
+        }
+        let _import = import_lock();
+        let Some(mut cx) = headless() else {
+            return;
+        };
+        cx.allow_parking();
+        cx.update(gpui_kit::init);
+        let player = playing(FIELDS_SOURCE);
+        // As above: 640x360 pixels, the video in x 80-560. The 30-point control bar covers y 300-360, over the yellow
+        // field and the bars.
+        let window = open(&mut cx, 320., 180., || Controlled(player.clone()));
+
+        // The control bar's `rgba(43, 51, 63, 0.7)` over yellow, and over black.
+        let bar = |under: [u8; 3]| -> [u8; 3] {
+            let over = [43., 51., 63.];
+            std::array::from_fn(|i| (0.3 * f64::from(under[i]) + 0.7 * over[i]).round() as u8)
+        };
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let image = loop {
+            cx.run_until_parked();
+            cx.update_window(window.into(), |_, window, _| window.refresh()).unwrap();
+            let image = screenshot(&mut cx, window);
+            // Its top edge, above the progress bar in its middle: plain bar.
+            if close(rgb(&image, 320, 270), [255, 255, 0]) && close(rgb(&image, 320, 302), bar([255, 255, 0])) {
+                break image;
+            }
+            assert!(Instant::now() < deadline, "timed out waiting for the video under the controls");
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        assert!(
+            close(rgb(&image, 40, 302), bar([0, 0, 0])),
+            "the bar spans the black bars: {:?}",
+            rgb(&image, 40, 302)
+        );
+        assert!(close(rgb(&image, 128, 90), [255, 0, 0]), "the video above the bar: {:?}", rgb(&image, 128, 90));
+    }
+
     /// A render player, for the tests of the device choice.
     fn render_player() -> Player {
         Player::builder().video_output(VideoOutput::Render).mpv_option("ao", "null").build().unwrap()

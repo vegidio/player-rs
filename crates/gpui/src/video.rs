@@ -497,4 +497,32 @@ pub(crate) mod tests {
         player.set_volume(0.5).unwrap();
         assert_eq!(player.get_property::<f64>("volume").unwrap(), 50.0);
     }
+
+    /// The scenario of WSL2 without `vgem`: the element stays black, warns once however often it is drawn, and the
+    /// player keeps playing. CI runs it with `/dev/dri` hidden.
+    #[cfg(target_os = "linux")]
+    #[gpui_kit::test]
+    fn warns_once_without_a_render_node(cx: &mut TestAppContext) {
+        if gl_skipped() || !no_render_node() {
+            eprintln!("skipped: needs a machine with no usable DRM render node, as WSL2 without `vgem`");
+            return;
+        }
+        take_warnings();
+        let player = playing();
+        let harness = open(cx, &[&player]);
+        harness.pump(cx, "the view", |_| live_views().len() == 1);
+        for _ in 0..5 {
+            harness.update(cx, |_| {});
+            harness.draw(cx);
+        }
+
+        let view = live_views().remove(0);
+        assert!(cx.read(|cx| view.read(cx).renderer().is_none()), "the element stays black");
+        let warnings = take_warnings();
+        let about_node = warnings.iter().filter(|warning| warning.contains("DRM render node is available")).count();
+        assert_eq!(about_node, 1, "one warning naming the reason: {warnings:?}");
+        harness.pump(cx, "playback", |_| player.state().position.is_some_and(|position| position > Duration::ZERO));
+        player.set_volume(0.5).unwrap();
+        assert_eq!(player.get_property::<f64>("volume").unwrap(), 50.0);
+    }
 }
