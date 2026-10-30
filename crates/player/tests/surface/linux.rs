@@ -362,11 +362,11 @@ fn default_layout_is_linear() {
 }
 
 #[test]
-fn layouts_are_taken_in_order_of_preference() {
+fn layouts_the_driver_cannot_use_are_skipped() {
     if skipped() {
         return;
     }
-    // The unusable layout is skipped for the linear one.
+    // The unusable layout is skipped for the linear one, whatever their order.
     let player = render_player(Autoplay::Off);
     let renderer = SurfaceRenderer::builder(&player).modifiers([X_TILED, MODIFIER_LINEAR]).build().unwrap();
     assert!([X_TILED, MODIFIER_LINEAR].contains(&renderer.modifier()));

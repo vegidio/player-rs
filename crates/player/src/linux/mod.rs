@@ -78,6 +78,7 @@ use crate::surface::{Attachment, OnFrame};
 use std::fmt;
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread::JoinHandle;
 
 /// `DRM_FORMAT_MOD_LINEAR`: rows one after the other, the layout every importer of dma-bufs understands.
@@ -90,7 +91,7 @@ pub const MODIFIER_LINEAR: u64 = gbm::LINEAR;
 pub struct SurfaceRenderer {
     attachment: Attachment<Frame, JoinHandle<()>>,
     device: DrmDevice,
-    modifier: u64,
+    modifier: Arc<AtomicU64>,
 }
 
 impl SurfaceRenderer {
@@ -121,9 +122,11 @@ impl SurfaceRenderer {
     }
 
     /// The DRM format modifier of the frames' buffers, one of those offered to
-    /// [`SurfaceRendererBuilder::modifiers`].
+    /// [`SurfaceRendererBuilder::modifiers`]. It is chosen when the renderer is built and kept at every size, unless
+    /// the driver cannot allocate it at a new size: the renderer then takes another offered one, which this returns
+    /// from before the first frame of that size. Each frame's own is [`Frame::modifier`].
     pub fn modifier(&self) -> u64 {
-        self.modifier
+        self.modifier.load(Ordering::Relaxed)
     }
 }
 
@@ -131,7 +134,7 @@ impl fmt::Debug for SurfaceRenderer {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("SurfaceRenderer")
             .field("device", &self.device)
-            .field("modifier", &format_args!("{:#x}", self.modifier))
+            .field("modifier", &format_args!("{:#x}", self.modifier()))
             .field("latest", &self.latest())
             .finish_non_exhaustive()
     }
@@ -153,8 +156,8 @@ impl SurfaceRendererBuilder {
         self
     }
 
-    /// The DRM format modifiers the consumer can import RGBA (`DRM_FORMAT_ABGR8888`) buffers with, in order of
-    /// preference. The renderer uses one of them that its driver can allocate with a single memory plane. Defaults to
+    /// The DRM format modifiers the consumer can import RGBA (`DRM_FORMAT_ABGR8888`) buffers with. The driver picks
+    /// one of them that it can allocate with a single memory plane; their order is not a preference. Defaults to
     /// [`MODIFIER_LINEAR`] alone.
     pub fn modifiers(mut self, modifiers: impl IntoIterator<Item = u64>) -> Self {
         self.modifiers = modifiers.into_iter().collect();

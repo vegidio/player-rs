@@ -11,6 +11,7 @@ use crate::surface::{self, Attachment, Backend, OnFrame, RING};
 use glow::HasContext;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::thread::JoinHandle;
 
 /// The size of the buffer allocated to check that a node can render with the modifiers asked for.
@@ -20,7 +21,8 @@ const PROBE_SIZE: (u32, u32) = (64, 64);
 pub(super) struct Started {
     pub(super) attachment: Attachment<Frame, JoinHandle<()>>,
     pub(super) device: DrmDevice,
-    pub(super) modifier: u64,
+    /// The modifier of the ring's buffers, which the render thread updates.
+    pub(super) modifier: Arc<AtomicU64>,
 }
 
 /// Starts the render thread for `player` and waits for it to be ready, so that its errors are returned here.
@@ -44,8 +46,9 @@ pub(super) fn spawn(
                     Some(gpu.device.node_fd()),
                 )
             }?;
-            let started = (gpu.node.device, gpu.modifier);
-            Ok((Renderer { ring: vec![], gpu, modifiers }, render, started))
+            let modifier = Arc::new(AtomicU64::new(gpu.modifier));
+            let started = (gpu.node.device, Arc::clone(&modifier));
+            Ok((Renderer { ring: vec![], gpu, modifiers, modifier }, render, started))
         })?;
     Ok(Started { attachment, device, modifier })
 }
@@ -118,6 +121,8 @@ struct Renderer {
     ring: Vec<Slot>,
     gpu: Gpu,
     modifiers: Vec<u64>,
+    /// The modifier in use: the probe's, until the driver cannot allocate it at a size.
+    modifier: Arc<AtomicU64>,
 }
 
 impl Backend for Renderer {
@@ -125,9 +130,17 @@ impl Backend for Renderer {
 
     fn rebuild(&mut self, width: u32, height: u32) -> Result<()> {
         let Gpu { gl, context, display, device, .. } = &self.gpu;
-        for _ in 0..RING {
-            self.ring.push(Slot::new(device, display, context, gl, (width, height), &self.modifiers)?);
+        let slot = |modifiers: &[u64]| Slot::new(device, display, context, gl, (width, height), modifiers);
+        // GBM's driver picks any of the modifiers it is given, and may pick another at another size. The one in use
+        // is asked for alone, so the layout stays the same; the others only where the driver cannot allocate it.
+        let first = slot(&[self.modifier.load(Ordering::Relaxed)]).or_else(|_| slot(&self.modifiers))?;
+        let modifier = first.buffer.modifier;
+        self.ring.push(first);
+        for _ in 1..RING {
+            self.ring.push(slot(&[modifier])?);
         }
+        // Before the first frame in the new buffers is published.
+        self.modifier.store(modifier, Ordering::Relaxed);
         Ok(())
     }
 

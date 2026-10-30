@@ -145,7 +145,7 @@ pub(super) struct Buffer {
 }
 
 impl Buffer {
-    /// Allocates a `width` x `height` buffer with one of `modifiers`, in order of preference.
+    /// Allocates a `width` x `height` buffer with one of `modifiers`, whichever the driver picks.
     pub(super) fn new(device: &Rc<Device>, width: u32, height: u32, modifiers: &[u64]) -> Result<Buffer> {
         let count = u32::try_from(modifiers.len()).map_err(|_| Error::Render("too many modifiers".into()))?;
         let unusable = |reason: String| {
