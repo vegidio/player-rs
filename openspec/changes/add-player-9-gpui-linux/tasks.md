@@ -63,7 +63,7 @@
 
 ## 6. Verification
 
-- [ ] 6.1 Manual check in WSLg on WSL2 with `vgem`, with a release build of `examples/play.rs` and a 1080p H.264 file, on lavapipe and on GL llvmpipe:
+- [x] 6.1 Manual check in WSLg on WSL2 with `vgem`, with a release build of `examples/play.rs` and a 1080p H.264 file, on lavapipe and on GL llvmpipe:
   - upright, colours, letterboxing
   - controls over the video, fullscreen, window resize
   - no repaint while paused
@@ -72,7 +72,7 @@
   - the process's fd count flat over a minute with resizes
 
   Also on GPUI's `d3d12` GL adapter (the default without `LIBGL_ALWAYS_SOFTWARE`): black, one warning, and audio and controls working. Record Mesa, kernel and results in design.md.
-- [ ] 6.2 Run `cargo fmt --check`, `cargo clippy --all-targets` and `cargo test` for the workspace on Linux (WSL2, with `vgem`, on both backends) and verify they are clean. Run the manual `test` workflow on the branch again, since the core changed after task 4.2, and verify that both lint jobs and all six legs pass, so the change is ready for verification and archive. Record the run in design.md.
+- [x] 6.2 Run `cargo fmt --check`, `cargo clippy --all-targets` and `cargo test` for the workspace on Linux (WSL2, with `vgem`, on both backends) and verify they are clean. Run the manual `test` workflow on the branch again, since the core changed after task 4.2, and verify that both lint jobs and all six legs pass, so the change is ready for verification and archive. Record the run in design.md.
 
 ## Workflow follow-up
 

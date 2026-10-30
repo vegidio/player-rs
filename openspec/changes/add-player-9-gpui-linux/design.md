@@ -269,6 +269,7 @@ WSL2, kernel 6.18.33.2-microsoft-standard-WSL2, Mesa 26.2.5 (kisak PPA), `vgem` 
 - **First round**, on `0.3.10-surfaces.2` before decision 10. lavapipe, one player: upright, colours and letterboxing right; controls over the video, fullscreen, resize and closing while playing right; no repaint while paused. GL llvmpipe: video black, audio and controls working. Two players on lavapipe: both black. The investigation behind decision 10 followed.
 - **With `scale=bilinear`:** lavapipe showed video crossed by black horizontal and vertical lines, also in both players after resizing. GL llvmpipe stayed black.
 - **With `gpu-dumb-mode=yes`** (decision 10): lavapipe and GL llvmpipe, one player each, and two players on lavapipe show the video, and it stays right after resizing. Closing while playing is clean.
+- **GL llvmpipe with decision 10**, `examples/play.rs`: controls over the video and fullscreen on and off right. While paused the window redraws 0-1 times a second (the controls fading), against 30-38 while playing.
 - **fd count**, two players on lavapipe, sampled every 10 s: 94 before the first frames, 108 (26 dma-bufs) once both play, 104 to 108 during resizes, and 108 (26) from 40 s to 70 s. It stays flat.
 - **`d3d12` GL** (no `LIBGL_ALWAYS_SOFTWARE`): black, one warning ("the video cannot be shown: render: no usable DRM render node is available"), playback position advancing and audio on pulse. In a window, GPUI's probe reports that `d3d12` cannot import dma-bufs, and the core cannot allocate on either node without software GL, so the failure comes from building the renderer, not from the first import as decision 3 expects headless. Both are the spec's black-with-one-warning case.
 
@@ -299,6 +300,10 @@ Changes made from it: LINEAR imports at the padded width on every path (decision
 #### CI run (task 4.2)
 
 Run 41028435517 on `add-player-9-gpui-linux` (`e36047d`): both lint jobs and all six legs passed. `player-gpui` unit tests per leg: Linux x64 and arm64 61 on lavapipe and 61 again on GL llvmpipe (`VK_DRIVER_FILES=/dev/null`); macOS arm64 and x64 56; Windows x64 and arm64 59. On both Linux legs and both backends, the five Linux tests (`frame_is_drawn_upright_and_letterboxed`, `video_is_drawn_upright_in_its_colours_and_letterboxed`, `warns_once_about_a_buffer_it_cannot_import` and the two device-choice tests) report `ok`. The log captures no skip messages, as the tests ran without `--nocapture`; their timings, spread over 1-4 seconds per backend, match the draws running rather than returning early.
+
+#### CI run (task 6.2)
+
+Run 41103777726 on `aa17d26`, after decision 10: both lint jobs and all six legs passed on attempt 2. `player-gpui` unit tests per leg: Linux x64 and arm64 61 on lavapipe and 61 on GL llvmpipe; macOS arm64 and x64 56; Windows x64 and arm64 59, as in task 4.2's run. Attempt 1 failed on Windows arm64 while linking, before any test ran: `crates/player` and `crates/gpui` both have an example named `play`, which Cargo links to the same `examples\play.exe` (it warns of the collision on every run), and the two links collided (`LNK1104`). That predates this change and is left for a follow-up. The run before it, 41098874692 on `7174b3a` (`scale=bilinear`), also passed on attempt 2; its attempt 1 failed `controls::tests::seek_bar_arrow_keys` on Linux arm64, a seek landing 0.35 s from its target against a 0.3 s tolerance, in code this change does not touch.
 
 ### 10. Software OpenGL rendering mode in the core (added during implementation)
 
