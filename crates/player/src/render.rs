@@ -103,9 +103,7 @@ impl RenderContext {
         on_frame: impl Fn() + Send + Sync + 'static,
         drm_render_fd: Option<c_int>,
     ) -> Result<RenderContext> {
-        if player.video_output() != VideoOutput::Render {
-            return Err(Error::Render("the player was not built with VideoOutput::Render".into()));
-        }
+        require_render_output(player)?;
         let active = ActiveFlag::claim(player.render_active())
             .ok_or_else(|| Error::Render("the player already has a render context".into()))?;
 
@@ -172,6 +170,14 @@ fn check_target(target: RenderTarget) -> Result<(c_int, c_int, c_int)> {
 
 /// `GL_RENDERER`.
 const GL_RENDERER: u32 = 0x1F01;
+
+/// Fails unless `player` was built with [`VideoOutput::Render`], which every render context needs.
+pub(crate) fn require_render_output(player: &Player) -> Result<()> {
+    if player.video_output() != VideoOutput::Render {
+        return Err(Error::Render("the player was not built with VideoOutput::Render".into()));
+    }
+    Ok(())
+}
 
 /// Whether the current GL context is one of Mesa's software renderers, llvmpipe or softpipe. `false` when
 /// `glGetString` cannot be resolved, as WGL's loader does for OpenGL 1.1 functions.

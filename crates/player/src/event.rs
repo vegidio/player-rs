@@ -48,6 +48,25 @@ pub struct State {
     pub buffered: Option<Duration>,
 }
 
+impl State {
+    /// The state of a player with nothing loaded yet.
+    pub(crate) fn initial(paused: bool, volume: f64, muted: bool) -> Self {
+        State {
+            idle: true,
+            position: None,
+            duration: None,
+            paused,
+            buffering: false,
+            volume,
+            muted,
+            rate: 1.0,
+            ended: false,
+            video_size: None,
+            buffered: None,
+        }
+    }
+}
+
 /// Something that happened in a player, received through [`Events`].
 #[derive(Debug, Clone, PartialEq)]
 #[non_exhaustive]
@@ -242,9 +261,8 @@ pub(crate) const LOAD_REPLY: u64 = 1;
 
 /// Loads `source` as [`Player::load`](crate::Player::load) does, applying the [`Autoplay`] mode.
 pub(crate) fn load(mpv: &Handle, autoplay: Autoplay, source: &Source) -> crate::Result<()> {
-    mpv.set("pause", autoplay == Autoplay::Off)?;
-    if autoplay == Autoplay::Muted {
-        mpv.set("mute", true)?;
+    for (name, value) in autoplay_properties(autoplay) {
+        mpv.set(name, value)?;
     }
     mpv.command_async(LOAD_REPLY, &["loadfile", source.as_str(), "replace"])
 }
@@ -252,12 +270,17 @@ pub(crate) fn load(mpv: &Handle, autoplay: Autoplay, source: &Source) -> crate::
 /// [`load`] without waiting on mpv, for the event thread: a synchronous call there could wait on mpv while mpv waits
 /// for its events to be read. mpv runs asynchronous commands in order.
 fn reload_async(mpv: &Handle, autoplay: Autoplay, source: &Source) {
-    let pause = if autoplay == Autoplay::Off { "yes" } else { "no" };
-    let _ = mpv.command_async(0, &["set", "pause", pause]);
-    if autoplay == Autoplay::Muted {
-        let _ = mpv.command_async(0, &["set", "mute", "yes"]);
+    for (name, value) in autoplay_properties(autoplay) {
+        let _ = mpv.command_async(0, &["set", name, if value { "yes" } else { "no" }]);
     }
     let _ = mpv.command_async(LOAD_REPLY, &["loadfile", source.as_str(), "replace"]);
+}
+
+/// The properties [`load`] sets before loading, for the [`Autoplay`] mode.
+fn autoplay_properties(autoplay: Autoplay) -> impl Iterator<Item = (&'static str, bool)> {
+    [("pause", autoplay == Autoplay::Off)]
+        .into_iter()
+        .chain((autoplay == Autoplay::Muted).then_some(("mute", true)))
 }
 
 /// The observed properties, identified by their `reply_userdata`.
@@ -278,58 +301,38 @@ enum Property {
 }
 
 impl Property {
-    const ALL: [Self; 12] = [
-        Self::TimePos,
-        Self::Duration,
-        Self::Pause,
-        Self::PausedForCache,
-        Self::Volume,
-        Self::Mute,
-        Self::Speed,
-        Self::IdleActive,
-        Self::EofReached,
-        Self::DWidth,
-        Self::DHeight,
-        Self::DemuxerCacheTime,
+    /// Each property with its name and format, in `reply_userdata` order.
+    const TABLE: [(Self, &'static str, sys::mpv_format); 12] = [
+        (Self::TimePos, "time-pos", sys::MPV_FORMAT_DOUBLE),
+        (Self::Duration, "duration", sys::MPV_FORMAT_DOUBLE),
+        (Self::Pause, "pause", sys::MPV_FORMAT_FLAG),
+        (Self::PausedForCache, "paused-for-cache", sys::MPV_FORMAT_FLAG),
+        (Self::Volume, "volume", sys::MPV_FORMAT_DOUBLE),
+        (Self::Mute, "mute", sys::MPV_FORMAT_FLAG),
+        (Self::Speed, "speed", sys::MPV_FORMAT_DOUBLE),
+        (Self::IdleActive, "idle-active", sys::MPV_FORMAT_FLAG),
+        (Self::EofReached, "eof-reached", sys::MPV_FORMAT_FLAG),
+        (Self::DWidth, "dwidth", sys::MPV_FORMAT_DOUBLE),
+        (Self::DHeight, "dheight", sys::MPV_FORMAT_DOUBLE),
+        (Self::DemuxerCacheTime, "demuxer-cache-time", sys::MPV_FORMAT_DOUBLE),
     ];
 
     fn name(self) -> &'static str {
-        match self {
-            Self::TimePos => "time-pos",
-            Self::Duration => "duration",
-            Self::Pause => "pause",
-            Self::PausedForCache => "paused-for-cache",
-            Self::Volume => "volume",
-            Self::Mute => "mute",
-            Self::Speed => "speed",
-            Self::IdleActive => "idle-active",
-            Self::EofReached => "eof-reached",
-            Self::DWidth => "dwidth",
-            Self::DHeight => "dheight",
-            Self::DemuxerCacheTime => "demuxer-cache-time",
-        }
+        Self::TABLE[self as usize - 1].1
     }
 
-    fn is_flag(self) -> bool {
-        !matches!(
-            self,
-            Self::TimePos
-                | Self::Duration
-                | Self::Volume
-                | Self::Speed
-                | Self::DWidth
-                | Self::DHeight
-                | Self::DemuxerCacheTime
-        )
+    fn format(self) -> sys::mpv_format {
+        Self::TABLE[self as usize - 1].2
     }
 
     fn from_id(id: u64) -> Option<Self> {
-        Self::ALL.into_iter().find(|property| *property as u64 == id)
+        let index = usize::try_from(id).ok()?.checked_sub(1)?;
+        Self::TABLE.get(index).map(|(property, ..)| *property)
     }
 
     /// Reads the property's current value directly, for when the state must be current before an event is sent.
     fn read(self, mpv: &Handle) -> PropertyData {
-        if self.is_flag() {
+        if self.format() == sys::MPV_FORMAT_FLAG {
             mpv.get::<bool>(self.name()).map_or(PropertyData::None, PropertyData::Flag)
         } else {
             mpv.get::<f64>(self.name()).map_or(PropertyData::None, PropertyData::Double)
@@ -391,12 +394,11 @@ fn apply_video_size(state: &mut State, width: PropertyData, height: PropertyData
 /// Subscribes to every property in the state table. The video's dimensions are observed only when `video` is set:
 /// mpv reports them even with `vo=null`, which shows no video.
 pub(crate) fn observe(mpv: &Handle, video: bool) -> Result<(), String> {
-    for property in Property::ALL {
+    for (property, ..) in Property::TABLE {
         if !video && matches!(property, Property::DWidth | Property::DHeight) {
             continue;
         }
-        let format = if property.is_flag() { sys::MPV_FORMAT_FLAG } else { sys::MPV_FORMAT_DOUBLE };
-        mpv.observe(property as u64, property.name(), format)?;
+        mpv.observe(property as u64, property.name(), property.format())?;
     }
     Ok(())
 }
@@ -519,19 +521,16 @@ mod tests {
     use super::*;
 
     fn state() -> State {
-        State {
-            idle: true,
-            position: None,
-            duration: None,
-            paused: false,
-            buffering: false,
-            volume: 1.0,
-            muted: false,
-            rate: 1.0,
-            ended: false,
-            video_size: None,
-            buffered: None,
+        State::initial(false, 1.0, false)
+    }
+
+    #[test]
+    fn property_table_follows_reply_ids() {
+        for (index, (property, ..)) in Property::TABLE.into_iter().enumerate() {
+            assert_eq!(property as usize, index + 1);
+            assert_eq!(Property::from_id(index as u64 + 1), Some(property));
         }
+        assert_eq!(Property::from_id(0), None);
     }
 
     #[test]

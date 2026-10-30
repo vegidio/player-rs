@@ -2,16 +2,13 @@
 //! set `PLAYER_TEST_GL=hardware` to use the GPU instead.
 
 use super::*;
-use crate::common::gl::Gl;
+use crate::gl::{self, Gl};
 use objc2_core_video::{
     CVPixelBuffer, CVPixelBufferGetBaseAddressOfPlane, CVPixelBufferGetBytesPerRowOfPlane, CVPixelBufferGetHeight,
     CVPixelBufferGetWidth, CVPixelBufferLockBaseAddress, CVPixelBufferLockFlags, CVPixelBufferUnlockBaseAddress,
 };
-use player::macos::{Frame, GlRenderer, SurfaceFormat, SurfaceRenderer};
-use player::prelude::*;
-use std::collections::HashSet;
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
-use std::time::{Duration, Instant};
+use player::macos::{GlRenderer, SurfaceFormat};
+use std::sync::mpsc;
 
 fn gl_renderer() -> GlRenderer {
     if std::env::var("PLAYER_TEST_GL").is_ok_and(|value| value == "hardware") {
@@ -21,8 +18,18 @@ fn gl_renderer() -> GlRenderer {
     }
 }
 
-/// Creates a surface renderer for `player`, notifying on the returned channel.
-fn renderer(player: &Player, format: SurfaceFormat) -> (SurfaceRenderer, Receiver<()>) {
+/// Whether the scenarios are skipped: GL tests are skipped.
+pub(crate) fn skipped() -> bool {
+    gl::skipped()
+}
+
+/// Creates a BGRA surface renderer for `player`, notifying on the returned channel.
+pub(crate) fn renderer(player: &Player) -> (SurfaceRenderer, Receiver<()>) {
+    renderer_with(player, SurfaceFormat::Bgra)
+}
+
+/// Creates a surface renderer of `format` for `player`, notifying on the returned channel.
+fn renderer_with(player: &Player, format: SurfaceFormat) -> (SurfaceRenderer, Receiver<()>) {
     let (sender, frames) = mpsc::channel();
     let renderer = SurfaceRenderer::builder(player)
         .format(format)
@@ -35,53 +42,16 @@ fn renderer(player: &Player, format: SurfaceFormat) -> (SurfaceRenderer, Receive
     (renderer, frames)
 }
 
-/// A render player and its surface renderer, declared so the renderer is dropped first.
-struct Rig {
-    renderer: SurfaceRenderer,
-    frames: Receiver<()>,
-    player: Player,
-}
-
-fn rig(format: SurfaceFormat, autoplay: Autoplay) -> Rig {
+/// A [`Rig`] whose renderer has `format`.
+fn rig_with(format: SurfaceFormat, autoplay: Autoplay) -> Rig {
     let player = render_player(autoplay);
-    let (renderer, frames) = renderer(&player, format);
+    let (renderer, frames) = renderer_with(&player, format);
     Rig { renderer, frames, player }
-}
-
-impl Rig {
-    /// Waits for a published frame `accept` returns true for. Fails after [`TIMEOUT`].
-    fn wait_frame(&self, what: &str, accept: impl Fn(&Frame) -> bool) -> Frame {
-        wait_frame(&self.renderer, &self.frames, &self.player, what, accept)
-    }
-}
-
-fn wait_frame(
-    renderer: &SurfaceRenderer,
-    frames: &Receiver<()>,
-    player: &Player,
-    what: &str,
-    accept: impl Fn(&Frame) -> bool,
-) -> Frame {
-    let deadline = Instant::now() + TIMEOUT;
-    loop {
-        if let Some(frame) = renderer.latest().filter(&accept) {
-            return frame;
-        }
-        assert!(Instant::now() < deadline, "timed out waiting for {what}; state: {:?}", player.state());
-        let _ = frames.recv_timeout(Duration::from_millis(50));
-    }
-}
-
-/// A frame read back as RGB, top row first.
-struct Picture {
-    width: usize,
-    height: usize,
-    rgb: Vec<[u8; 3]>,
 }
 
 impl Picture {
     /// Reads a frame, decoding NV12 with the full-range BT.601 matrix GPUI uses.
-    fn of(frame: &Frame) -> Picture {
+    pub(crate) fn of(frame: &Frame) -> Picture {
         let buffer = frame.pixel_buffer();
         let (width, height) = (CVPixelBufferGetWidth(buffer), CVPixelBufferGetHeight(buffer));
         assert_eq!(
@@ -107,36 +77,6 @@ impl Picture {
             format => panic!("unexpected format {format:?}"),
         };
         Picture { width, height, rgb }
-    }
-
-    fn pixel(&self, x: usize, y: usize) -> [u8; 3] {
-        self.rgb[y * self.width + x]
-    }
-
-    /// The number of distinct colours, ignoring the lowest bits so rounding does not count.
-    fn colours(&self) -> usize {
-        self.rgb.iter().map(|[r, g, b]| (r >> 4, g >> 4, b >> 4)).collect::<HashSet<_>>().len()
-    }
-
-    /// The mean number of distinct colours per row over `rows`.
-    fn row_colours(&self, rows: std::ops::Range<usize>) -> f64 {
-        let count = rows.len();
-        let total: usize = rows
-            .map(|y| {
-                let row = &self.rgb[y * self.width..(y + 1) * self.width];
-                row.iter().map(|[r, g, b]| (r >> 4, g >> 4, b >> 4)).collect::<HashSet<_>>().len()
-            })
-            .sum();
-        total as f64 / count as f64
-    }
-
-    /// Whether `testsrc` is upright: its scrolling gradient, many colours along each row, is in the lower part of the
-    /// picture (rows 88-108 of 120), and the mirrored rows hold only a few colour bars.
-    fn is_upright_test_pattern(&self) -> bool {
-        let scale = |row: usize| row * self.height / 120;
-        let gradient = self.row_colours(scale(92)..scale(104));
-        let mirrored = self.row_colours(scale(16)..scale(28));
-        gradient > 2.0 * mirrored
     }
 
     /// The mean absolute difference per channel, from 0 to 255.
@@ -176,11 +116,6 @@ fn decode(y: u8, cb: u8, cr: u8) -> [u8; 3] {
         .map(|channel| channel.round().clamp(0.0, 255.0) as u8)
 }
 
-/// Whether a frame shows video rather than a blank picture.
-fn shows_video(frame: &Frame) -> bool {
-    Picture::of(frame).colours() >= 8
-}
-
 #[test]
 fn rejects_a_player_without_render_output() {
     let player = Player::builder().mpv_option("ao", "null").build().unwrap();
@@ -196,7 +131,7 @@ fn rejects_a_player_without_render_output() {
 
 #[test]
 fn second_renderer_fails_and_the_first_keeps_working() {
-    let rig = rig(SurfaceFormat::Bgra, Autoplay::Off);
+    let rig = rig_with(SurfaceFormat::Bgra, Autoplay::Off);
     let second = SurfaceRenderer::builder(&rig.player).gl_renderer(gl_renderer()).build();
     let Err(Error::Render(message)) = second else {
         panic!("a second surface renderer was created: {second:?}")
@@ -232,55 +167,15 @@ fn fails_while_a_render_context_exists() {
         .expect("the render context still renders");
     gl.delete(framebuffer);
     drop(render);
-    let (renderer, frames) = renderer(&player, SurfaceFormat::Bgra);
+    let (renderer, frames) = renderer_with(&player, SurfaceFormat::Bgra);
     renderer.set_size(160, 120);
     player.load(url(TEST_SOURCE)).unwrap();
     wait_frame(&renderer, &frames, &player, "the surface renderer to show video", shows_video);
 }
 
 #[test]
-fn recreated_after_drop_publishes_frames() {
-    let player = render_player(Autoplay::Off);
-    let (first, _frames) = renderer(&player, SurfaceFormat::Bgra);
-    drop(first);
-    let (second, frames) = renderer(&player, SurfaceFormat::Bgra);
-    second.set_size(160, 120);
-    player.load(url(TEST_SOURCE)).unwrap();
-    wait_frame(&second, &frames, &player, "the new renderer to show video", shows_video);
-}
-
-#[test]
-fn no_frame_without_a_size() {
-    let rig = rig(SurfaceFormat::Bgra, Autoplay::On);
-    let events = rig.player.subscribe();
-    rig.player.load(url(TEST_SOURCE)).unwrap();
-    wait_position_past(&events, Duration::from_millis(500));
-    assert!(rig.renderer.latest().is_none(), "a frame was published");
-    assert!(rig.frames.try_recv().is_err(), "a frame was announced");
-}
-
-#[test]
-fn frames_while_playing_have_the_set_size() {
-    let rig = rig(SurfaceFormat::Bgra, Autoplay::On);
-    rig.renderer.set_size(320, 180);
-    rig.player.load(url(TEST_SOURCE)).unwrap();
-
-    let first = rig.wait_frame("a video frame", shows_video);
-    let mut sequence = first.sequence();
-    for _ in 0..10 {
-        rig.frames.recv_timeout(TIMEOUT).expect("frames keep being announced");
-        let frame = rig.renderer.latest().expect("a frame is published before it is announced");
-        assert_eq!((frame.width(), frame.height()), (320, 180));
-        assert!(frame.sequence() >= sequence, "frames are published in order");
-        sequence = frame.sequence();
-    }
-    assert!(sequence > first.sequence(), "the latest frame changes while playing");
-    assert_eq!(Picture::of(&rig.renderer.latest().unwrap()).width, 320);
-}
-
-#[test]
 fn latest_frame_from_another_thread() {
-    let rig = rig(SurfaceFormat::Nv12, Autoplay::On);
+    let rig = rig_with(SurfaceFormat::Nv12, Autoplay::On);
     rig.renderer.set_size(160, 120);
     rig.player.load(url(TEST_SOURCE)).unwrap();
     rig.wait_frame("a video frame", shows_video);
@@ -298,7 +193,7 @@ fn latest_frame_from_another_thread() {
 
 #[test]
 fn odd_size_with_nv12_rounds_up() {
-    let rig = rig(SurfaceFormat::Nv12, Autoplay::Off);
+    let rig = rig_with(SurfaceFormat::Nv12, Autoplay::Off);
     rig.renderer.set_size(321, 181);
     let frame = rig.wait_frame("a frame", |_| true);
     assert_eq!((frame.width(), frame.height()), (322, 182));
@@ -306,21 +201,8 @@ fn odd_size_with_nv12_rounds_up() {
 }
 
 #[test]
-fn resize_while_paused() {
-    let rig = rig(SurfaceFormat::Bgra, Autoplay::Off);
-    rig.renderer.set_size(160, 120);
-    rig.player.load(url(TEST_SOURCE)).unwrap();
-    rig.wait_frame("the first frame", shows_video);
-    assert!(rig.player.state().paused);
-
-    rig.renderer.set_size(240, 180);
-    let frame = rig.wait_frame("a frame at the new size", |frame| (frame.width(), frame.height()) == (240, 180));
-    assert!(shows_video(&frame), "the paused picture is shown at the new size");
-}
-
-#[test]
 fn zero_size_stops_publication() {
-    let rig = rig(SurfaceFormat::Bgra, Autoplay::On);
+    let rig = rig_with(SurfaceFormat::Bgra, Autoplay::On);
     let events = rig.player.subscribe();
     rig.renderer.set_size(160, 120);
     rig.player.load(url(TEST_SOURCE)).unwrap();
@@ -341,7 +223,7 @@ fn zero_size_stops_publication() {
 #[test]
 fn black_with_nothing_loaded() {
     for format in [SurfaceFormat::Bgra, SurfaceFormat::Nv12] {
-        let rig = rig(format, Autoplay::Off);
+        let rig = rig_with(format, Autoplay::Off);
         rig.renderer.set_size(160, 120);
         let picture = Picture::of(&rig.wait_frame("a frame", |_| true));
         let lit = picture.rgb.iter().filter(|pixel| !is_black(**pixel)).count();
@@ -349,24 +231,9 @@ fn black_with_nothing_loaded() {
     }
 }
 
-#[test]
-fn bgra_test_pattern_is_upright() {
-    let rig = rig(SurfaceFormat::Bgra, Autoplay::Off);
-    rig.renderer.set_size(160, 120);
-    rig.player.load(url(TEST_SOURCE)).unwrap();
-    let picture = Picture::of(&rig.wait_frame("the first frame", shows_video));
-    assert!(picture.colours() >= 8, "the frame shows the test pattern, not a blank image");
-    assert!(
-        picture.is_upright_test_pattern(),
-        "the gradient is at the bottom: {:.1} colours per row there, {:.1} in the mirrored rows",
-        picture.row_colours(92..104),
-        picture.row_colours(16..28)
-    );
-}
-
 /// The first frame of `source` from a new player and renderer of `format`, at 160x120.
 fn first_frame(source: &str, format: SurfaceFormat) -> Picture {
-    let rig = rig(format, Autoplay::Off);
+    let rig = rig_with(format, Autoplay::Off);
     rig.renderer.set_size(160, 120);
     rig.player.load(url(source)).unwrap();
     Picture::of(&rig.wait_frame("the first frame", |frame| Picture::of(frame).colours() >= 4))
@@ -398,24 +265,6 @@ fn nv12_orientation_matches_bgra() {
 }
 
 #[test]
-fn letterboxing() {
-    let rig = rig(SurfaceFormat::Bgra, Autoplay::Off);
-    rig.renderer.set_size(320, 120);
-    rig.player.load(url(TEST_SOURCE)).unwrap();
-    let picture = Picture::of(&rig.wait_frame("the first frame", shows_video));
-    // The 160x120 video fills columns 80..240; a few columns at each edge are skipped for filtering.
-    for y in 0..120 {
-        for x in (0..76).chain(244..320) {
-            assert!(is_black(picture.pixel(x, y)), "pixel ({x}, {y}) is in a bar but is {:?}", picture.pixel(x, y));
-        }
-    }
-    let lit = (84..236)
-        .flat_map(|x| (0..120).map(move |y| (x, y)))
-        .filter(|&(x, y)| !is_black(picture.pixel(x, y)));
-    assert!(lit.count() > 152 * 120 / 2, "the video fills the middle");
-}
-
-#[test]
 fn renderer_created_after_load() {
     let player = render_player(Autoplay::On);
     let events = player.subscribe();
@@ -427,7 +276,7 @@ fn renderer_created_after_load() {
     let before = player.state().position.unwrap();
     let start = Instant::now();
 
-    let (renderer, frames) = renderer(&player, SurfaceFormat::Nv12);
+    let (renderer, frames) = renderer_with(&player, SurfaceFormat::Nv12);
     renderer.set_size(160, 120);
     wait_frame(&renderer, &frames, &player, "the video to appear", shows_video);
 
@@ -444,7 +293,7 @@ fn renderer_created_after_load() {
 
 #[test]
 fn drop_renderer_while_playing() {
-    let rig = rig(SurfaceFormat::Nv12, Autoplay::On);
+    let rig = rig_with(SurfaceFormat::Nv12, Autoplay::On);
     let events = rig.player.subscribe();
     rig.renderer.set_size(160, 120);
     rig.player.load(url(TEST_SOURCE_WITH_AUDIO)).unwrap();
@@ -466,7 +315,7 @@ fn drop_renderer_while_playing() {
 
 #[test]
 fn drop_player_before_renderer() {
-    let rig = rig(SurfaceFormat::Nv12, Autoplay::On);
+    let rig = rig_with(SurfaceFormat::Nv12, Autoplay::On);
     rig.renderer.set_size(160, 120);
     rig.player.load(url(TEST_SOURCE)).unwrap();
     rig.wait_frame("a video frame", shows_video);
@@ -479,7 +328,7 @@ fn drop_player_before_renderer() {
 
 #[test]
 fn frame_outlives_its_renderer() {
-    let rig = rig(SurfaceFormat::Nv12, Autoplay::Off);
+    let rig = rig_with(SurfaceFormat::Nv12, Autoplay::Off);
     rig.renderer.set_size(160, 120);
     rig.player.load(url(TEST_SOURCE)).unwrap();
     let frame = rig.wait_frame("the first frame", shows_video);
@@ -492,33 +341,11 @@ fn frame_outlives_its_renderer() {
 }
 
 #[test]
-fn no_notification_after_drop() {
-    let rig = rig(SurfaceFormat::Bgra, Autoplay::On);
-    rig.renderer.set_size(160, 120);
-    rig.player.load(url(TEST_SOURCE_WITH_AUDIO)).unwrap();
-    rig.wait_frame("a video frame", shows_video);
-
-    let Rig { renderer, frames, player } = rig;
-    drop(renderer);
-    // Notifications sent before the drop may still be queued. After them the channel must be closed: the callback,
-    // which holds the only sender, is gone, so it cannot be called again.
-    let deadline = Instant::now() + TIMEOUT;
-    loop {
-        match frames.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
-            Ok(()) => {}
-            Err(RecvTimeoutError::Disconnected) => break,
-            Err(RecvTimeoutError::Timeout) => panic!("the notification outlived the renderer"),
-        }
-    }
-    drop(player);
-}
-
-#[test]
 fn software_renderer_switches_to_bilinear_scaling() {
     if gl_renderer() != GlRenderer::Software {
         return;
     }
-    let rig = rig(SurfaceFormat::Nv12, Autoplay::Off);
+    let rig = rig_with(SurfaceFormat::Nv12, Autoplay::Off);
     for option in ["scale", "dscale", "cscale"] {
         assert_eq!(rig.player.get_property::<String>(option).unwrap(), "bilinear", "{option}");
     }
@@ -580,7 +407,7 @@ fn media_without_audio_loaded_before_the_renderer() {
         }
     }
 
-    let (renderer, frames) = renderer(&player, SurfaceFormat::Nv12);
+    let (renderer, frames) = renderer_with(&player, SurfaceFormat::Nv12);
     renderer.set_size(160, 120);
     wait_loaded(&events);
     wait_frame(&renderer, &frames, &player, "the video to appear", shows_video);
@@ -592,7 +419,7 @@ fn media_without_audio_loaded_just_before_the_renderer() {
     for _ in 0..5 {
         let player = render_player(Autoplay::On);
         player.load(h264_fixture()).unwrap();
-        let (renderer, frames) = renderer(&player, SurfaceFormat::Nv12);
+        let (renderer, frames) = renderer_with(&player, SurfaceFormat::Nv12);
         renderer.set_size(160, 120);
         wait_frame(&renderer, &frames, &player, "the video to appear", shows_video);
     }

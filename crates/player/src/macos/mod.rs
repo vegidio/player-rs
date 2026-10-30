@@ -47,28 +47,24 @@ mod convert;
 mod surface;
 mod thread;
 
+#[cfg(any(doc, test))]
 use crate::builder::VideoOutput;
-use crate::error::{Error, Result};
-use crate::event;
+#[cfg(doc)]
+use crate::error::Error;
+use crate::error::Result;
 use crate::player::Player;
-use crate::surface::OnFrame;
+use crate::surface::{Attachment, OnFrame};
 use objc2_core_foundation::CFRetained;
 use objc2_core_video::CVPixelBuffer;
 use std::fmt;
-use std::sync::Arc;
 use std::thread::JoinHandle;
-use thread::Shared;
 
 /// Renders a player's video into IOSurface-backed `CVPixelBuffer`s on a thread it owns, and publishes the newest one.
 ///
 /// Created with [`SurfaceRenderer::builder`]. Dropping it stops the render thread; the player keeps playing without
 /// video.
 pub struct SurfaceRenderer {
-    shared: Arc<Shared>,
-    thread: Option<JoinHandle<()>>,
-    /// The player's state shared with its event thread, told when this renderer goes away. Holding it does not keep
-    /// the player alive.
-    player: Arc<event::Shared>,
+    attachment: Attachment<Frame, JoinHandle<()>>,
 }
 
 impl SurfaceRenderer {
@@ -85,22 +81,12 @@ impl SurfaceRenderer {
     /// Sets the size of the frames to render, in pixels. Until it is set, and while either dimension is zero, no
     /// frame is published. A change is rendered right away, also while paused. NV12 rounds odd dimensions up by one.
     pub fn set_size(&self, width: u32, height: u32) {
-        self.shared.set_size(width, height);
+        self.attachment.set_size(width, height);
     }
 
     /// The newest published frame, if any. Never waits on mpv or on the render thread.
     pub fn latest(&self) -> Option<Frame> {
-        self.shared.latest()
-    }
-}
-
-impl Drop for SurfaceRenderer {
-    fn drop(&mut self) {
-        crate::surface::detached(&self.player);
-        self.shared.shutdown();
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
+        self.attachment.latest()
     }
 }
 
@@ -150,17 +136,13 @@ impl SurfaceRendererBuilder {
     /// Returns [`Error::Render`] if the player was not built with [`VideoOutput::Render`], if it already has a render
     /// context or surface renderer, or if no OpenGL context can be created or used. The player keeps working.
     pub fn build(self) -> Result<SurfaceRenderer> {
-        if self.player.video_output() != VideoOutput::Render {
-            return Err(Error::Render("the player was not built with VideoOutput::Render".into()));
-        }
-        let shared = Arc::new(Shared::default());
-        let (thread, software) =
-            thread::spawn(&self.player, self.format, self.gl_renderer, self.on_frame, Arc::clone(&shared))?;
+        crate::render::require_render_output(&self.player)?;
+        let (attachment, software) = thread::spawn(&self.player, self.format, self.gl_renderer, self.on_frame)?;
         if software {
             use_bilinear_scaling(&self.player);
         }
         crate::surface::attached(&self.player);
-        Ok(SurfaceRenderer { shared, thread: Some(thread), player: Arc::clone(self.player.shared()) })
+        Ok(SurfaceRenderer { attachment })
     }
 }
 
@@ -269,6 +251,7 @@ mod tests {
     use super::*;
     use crate::test_gl;
     use std::any::Any;
+    use std::sync::Arc;
 
     /// Drops the player and its surface renderer in either order, and checks that the mpv instance is released with
     /// the last of them, and not before.

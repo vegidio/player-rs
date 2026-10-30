@@ -104,29 +104,13 @@ unsafe fn plane(
         gl.bind_texture(glow::TEXTURE_RECTANGLE, Some(texture));
         let bound = context.bind_io_surface(surface, plane, (width, height), formats);
         gl.bind_texture(glow::TEXTURE_RECTANGLE, None);
-        let fbo = match bound.and_then(|()| gl.create_framebuffer().map_err(Error::Render)) {
-            Ok(fbo) => fbo,
+        match bound.and_then(|()| crate::gl::framebuffer(gl, glow::TEXTURE_RECTANGLE, texture, "surface")) {
+            Ok(fbo) => Ok(Plane { fbo, texture, width, height }),
             Err(error) => {
                 gl.delete_texture(texture);
-                return Err(error);
+                Err(error)
             }
-        };
-        gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fbo));
-        gl.framebuffer_texture_2d(
-            glow::FRAMEBUFFER,
-            glow::COLOR_ATTACHMENT0,
-            glow::TEXTURE_RECTANGLE,
-            Some(texture),
-            0,
-        );
-        let status = gl.check_framebuffer_status(glow::FRAMEBUFFER);
-        gl.bind_framebuffer(glow::FRAMEBUFFER, None);
-        let plane = Plane { fbo, texture, width, height };
-        if status != glow::FRAMEBUFFER_COMPLETE {
-            delete_plane(gl, plane);
-            return Err(Error::Render(format!("the surface framebuffer is incomplete (status {status:#x})")));
         }
-        Ok(plane)
     }
 }
 

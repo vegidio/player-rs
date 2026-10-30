@@ -5,6 +5,7 @@
 
 mod common;
 
+use common::{TIMEOUT, wait_for};
 use player::prelude::*;
 use rust_sak::fs::{TempDir, mk_temp_dir};
 use std::future::Future;
@@ -17,9 +18,6 @@ use std::time::{Duration, Instant};
 
 /// Two seconds of generated video.
 const TEST_SOURCE: &str = "av://lavfi:testsrc=duration=2:size=160x120:rate=25";
-
-/// How long to wait for any expected event before failing.
-const TIMEOUT: Duration = Duration::from_secs(15);
 
 fn player(autoplay: Autoplay) -> Player {
     Player::builder()
@@ -38,19 +36,6 @@ fn wav_source() -> (TempDir, Source) {
     let dir = mk_temp_dir("player-rs-").unwrap();
     let path = common::write_wav(dir.path(), "tone.wav", 2);
     (dir, Source::file(path).unwrap())
-}
-
-/// Waits for the first event matching `predicate` and returns it.
-fn wait_for(events: &Events, what: &str, mut predicate: impl FnMut(&Event) -> bool) -> Event {
-    let deadline = Instant::now() + TIMEOUT;
-    loop {
-        let left = deadline.saturating_duration_since(Instant::now());
-        match events.recv_timeout(left) {
-            Some(event) if predicate(&event) => return event,
-            Some(_) => {}
-            None => panic!("timed out waiting for {what}"),
-        }
-    }
 }
 
 /// Waits until the player's state satisfies `predicate`, checking after every event.

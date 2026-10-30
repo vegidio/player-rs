@@ -5,23 +5,12 @@ use super::cgl::{Context, Loader};
 use super::convert::{Converter, Scratch};
 use super::surface::Surface;
 use super::{Frame, GlRenderer, SurfaceFormat};
-use crate::error::{Error, Result};
+use crate::error::Result;
 use crate::player::Player;
 use crate::render::{RenderContext, RenderTarget};
-use crate::surface::OnFrame;
-use glow::HasContext;
+use crate::surface::{self, Attachment, Backend, OnFrame, RING};
 use std::sync::Arc;
-use std::sync::mpsc;
 use std::thread::JoinHandle;
-
-/// Surfaces in the ring: a published frame is overwritten only after two newer ones are published.
-const RING: usize = 3;
-
-/// How long to wait for the GPU to finish a frame before giving up on it, in nanoseconds.
-const FENCE_TIMEOUT: i32 = 1_000_000_000;
-
-/// What the render thread and the [`SurfaceRenderer`](super::SurfaceRenderer) share.
-pub(super) type Shared = crate::surface::Shared<Frame>;
 
 /// Starts the render thread for `player` and waits for it to be ready, so that its errors are returned here. Also
 /// returns whether it draws with Apple's software renderer.
@@ -30,198 +19,107 @@ pub(super) fn spawn(
     format: SurfaceFormat,
     gl_renderer: GlRenderer,
     on_frame: OnFrame,
-    shared: Arc<Shared>,
-) -> Result<(JoinHandle<()>, bool)> {
-    let (ready, initialised) = mpsc::sync_channel(1);
-    // Only used to create the render context, then dropped: a renderer must not keep the player from stopping.
-    let player = player.clone();
-    let thread = std::thread::Builder::new()
-        .name("player-surface".into())
-        .spawn(move || {
-            let renderer = Renderer::new(&player, format, gl_renderer, on_frame, shared);
-            drop(player);
-            match renderer {
-                Ok(renderer) => {
-                    let _ = ready.send(Ok(renderer.context.is_software()));
-                    renderer.run();
-                }
-                Err(error) => {
-                    let _ = ready.send(Err(error));
-                }
-            }
-        })
-        .map_err(|error| Error::Render(format!("could not start the render thread: {error}")))?;
-
-    match initialised.recv() {
-        Ok(Ok(software)) => Ok((thread, software)),
-        Ok(Err(error)) => {
-            let _ = thread.join();
-            Err(error)
-        }
-        Err(_) => {
-            let _ = thread.join();
-            Err(Error::Render("the render thread stopped while starting".into()))
-        }
-    }
-}
-
-/// The render thread's state. Declared in drop order: everything GL-related is released in `Drop` while `context` is
-/// still current, then the context itself is destroyed.
-struct Renderer {
-    render: Option<RenderContext>,
-    ring: Vec<Surface>,
-    scratch: Option<Scratch>,
-    converter: Option<Converter>,
-    gl: glow::Context,
-    context: Context,
-    format: SurfaceFormat,
-    /// The size of the surfaces in `ring`.
-    size: Option<(u32, u32)>,
-    next: usize,
-    sequence: u64,
-    shared: Arc<Shared>,
-    on_frame: OnFrame,
-}
-
-impl Renderer {
-    fn new(
-        player: &Player,
-        format: SurfaceFormat,
-        gl_renderer: GlRenderer,
-        on_frame: OnFrame,
-        shared: Arc<Shared>,
-    ) -> Result<Renderer> {
+) -> Result<(Attachment<Frame, JoinHandle<()>>, bool)> {
+    surface::start(player, surface::spawn_thread, on_frame, move |player, shared| {
         let context = Context::new(gl_renderer)?;
         let loader = Loader::new()?;
         // SAFETY: `context` is current on this thread, and the loader resolves its functions.
         let gl = unsafe { glow::Context::from_loader_function_cstr(|name| loader.get(name)) };
 
-        let signal = Arc::clone(&shared);
-        // SAFETY: `context` is current on this thread, where the render context is used and dropped (first, in
-        // `Drop`), and it outlives the render context. It is a 3.2 core context.
+        let signal = Arc::clone(shared);
+        // SAFETY: `context` is current on this thread, where the render context is used and dropped (before the
+        // renderer), and it outlives the render context. It is a 3.2 core context.
         let render = unsafe { RenderContext::new(player, move |name| loader.get(name), move || signal.mpv_frame()) }?;
-        let converter = match format {
+        let nv12 = match format {
             SurfaceFormat::Bgra => None,
-            SurfaceFormat::Nv12 => Some(Converter::new(&gl)?),
+            SurfaceFormat::Nv12 => Some(Nv12 { converter: Converter::new(&gl)?, scratch: None }),
         };
+        let software = context.is_software();
+        Ok((Renderer { ring: vec![], nv12, gl, context, format }, render, software))
+    })
+}
 
-        Ok(Renderer {
-            render: Some(render),
-            ring: vec![],
-            scratch: None,
-            converter,
-            gl,
-            context,
-            format,
-            size: None,
-            next: 0,
-            sequence: 0,
-            shared,
-            on_frame,
-        })
+/// The NV12 conversion: mpv renders RGB into `scratch`, which `converter` turns into the surface's two planes.
+struct Nv12 {
+    converter: Converter,
+    /// Exists while the ring does.
+    scratch: Option<Scratch>,
+}
+
+/// The render thread's GL state. Declared in drop order: the GL objects are released in `Drop` while `context` is
+/// still current, then the context itself is destroyed.
+struct Renderer {
+    ring: Vec<Surface>,
+    nv12: Option<Nv12>,
+    gl: glow::Context,
+    context: Context,
+    format: SurfaceFormat,
+}
+
+impl Backend for Renderer {
+    type Frame = Frame;
+
+    fn frame_size(&self, width: u32, height: u32) -> (u32, u32) {
+        self.format.surface_size(width, height)
     }
 
-    fn run(mut self) {
-        while let Some(size) = self.shared.wait() {
-            let render = self.render.as_mut().expect("the render context lives until the drop");
-            // Clears mpv's update flag. A redraw request is rendered like a new frame.
-            render.update();
-            if let Some((width, height)) = size.filter(|&(width, height)| width > 0 && height > 0) {
-                // A frame that cannot be drawn is skipped; the next signal tries again.
-                let _ = self.draw(self.format.surface_size(width, height));
-            }
-        }
-    }
-
-    /// Renders the current picture into the next surface, waits for the GPU to finish it, publishes it and notifies.
-    fn draw(&mut self, (width, height): (u32, u32)) -> Result<()> {
-        if self.size != Some((width, height)) {
-            self.rebuild(width, height)?;
-        }
-        let surface = &self.ring[self.next];
-        self.next = (self.next + 1) % RING;
-
-        let target = match &self.scratch {
-            Some(scratch) => scratch.fbo,
-            None => surface.planes[0].fbo,
-        };
-        let render = self.render.as_mut().expect("the render context lives until the drop");
-        // Unflipped: the picture's top row goes to the surface's row 0, which Metal and CoreVideo read as the top.
-        render.render(RenderTarget { fbo: target.0.get(), width, height }, false)?;
-        if let (Some(converter), Some(scratch)) = (&self.converter, &self.scratch) {
-            converter.convert(&self.gl, scratch, surface);
-        }
-
-        // Another API reads the surface next, and IOSurface does not synchronise GL with it.
-        finish(&self.context, &self.gl)?;
-
-        self.sequence += 1;
-        self.shared.publish(Frame {
-            buffer: surface.buffer.clone(),
-            width,
-            height,
-            format: self.format,
-            sequence: self.sequence,
-        });
-        render.report_swap();
-        (self.on_frame)();
-        Ok(())
-    }
-
-    /// Replaces the ring, and the NV12 scratch target, with ones of the new size. Frames the host holds keep their
-    /// own surfaces alive.
     fn rebuild(&mut self, width: u32, height: u32) -> Result<()> {
-        self.release();
-        if self.format == SurfaceFormat::Nv12 {
-            self.scratch = Some(Scratch::new(&self.gl, width, height)?);
+        if let Some(nv12) = &mut self.nv12 {
+            nv12.scratch = Some(Scratch::new(&self.gl, width, height)?);
         }
         for _ in 0..RING {
             self.ring.push(Surface::new(&self.context, &self.gl, self.format, width, height)?);
         }
-        self.size = Some((width, height));
         Ok(())
     }
 
-    /// Deletes the ring and the scratch target.
+    fn draw(
+        &mut self,
+        render: &mut RenderContext,
+        slot: usize,
+        (width, height): (u32, u32),
+        sequence: u64,
+    ) -> Result<Frame> {
+        let surface = &self.ring[slot];
+        let scratch = self.nv12.as_ref().and_then(|nv12| Some((&nv12.converter, nv12.scratch.as_ref()?)));
+        let target = match scratch {
+            Some((_, scratch)) => scratch.fbo,
+            None => surface.planes[0].fbo,
+        };
+        // Unflipped: the picture's top row goes to the surface's row 0, which Metal and CoreVideo read as the top.
+        render.render(RenderTarget { fbo: target.0.get(), width, height }, false)?;
+        if let Some((converter, scratch)) = scratch {
+            converter.convert(&self.gl, scratch, surface);
+        }
+
+        // Another API reads the surface next, and IOSurface does not synchronise GL with it. On the GPU a fence
+        // suffices. Apple's software renderer signals fences before its writes reach the IOSurface, so there only
+        // `glFinish` does.
+        if self.context.is_software() {
+            // SAFETY: the context is current on this thread.
+            unsafe { glow::HasContext::finish(&self.gl) };
+        } else {
+            crate::gl::fence_wait(&self.gl)?;
+        }
+
+        Ok(Frame { buffer: surface.buffer.clone(), width, height, format: self.format, sequence })
+    }
+
     fn release(&mut self) {
-        self.size = None;
-        self.next = 0;
         for surface in self.ring.drain(..) {
             surface.delete(&self.gl);
         }
-        if let Some(scratch) = self.scratch.take() {
+        if let Some(scratch) = self.nv12.as_mut().and_then(|nv12| nv12.scratch.take()) {
             scratch.delete(&self.gl);
         }
     }
 }
 
-/// Waits until the surface's contents are in its memory. On the GPU a fence suffices. Apple's software renderer
-/// signals fences before its writes reach the IOSurface, so there only `glFinish` does.
-fn finish(context: &Context, gl: &glow::Context) -> Result<()> {
-    // SAFETY: the context is current on this thread; the fence is deleted right after the wait.
-    unsafe {
-        if context.is_software() {
-            gl.finish();
-            return Ok(());
-        }
-        let fence = gl.fence_sync(glow::SYNC_GPU_COMMANDS_COMPLETE, 0).map_err(Error::Render)?;
-        let status = gl.client_wait_sync(fence, glow::SYNC_FLUSH_COMMANDS_BIT, FENCE_TIMEOUT);
-        gl.delete_sync(fence);
-        if status != glow::ALREADY_SIGNALED && status != glow::CONDITION_SATISFIED {
-            return Err(Error::Render(format!("the GPU did not finish the frame (status {status:#x})")));
-        }
-    }
-    Ok(())
-}
-
 impl Drop for Renderer {
     fn drop(&mut self) {
-        // mpv's render context first, with the GL context current, as mpv requires; then this thread's GL objects.
-        // The CGL context is destroyed after this, with the fields.
-        drop(self.render.take());
-        self.release();
-        if let Some(converter) = self.converter.take() {
-            converter.delete(&self.gl);
+        // After mpv's render context and the ring; the CGL context is destroyed after this, with the fields.
+        if let Some(nv12) = self.nv12.take() {
+            nv12.converter.delete(&self.gl);
         }
     }
 }

@@ -6,10 +6,14 @@ use crate::event::{self, Events, Shared, State};
 use crate::mpv::{Handle, PropertyValue};
 use crate::source::Source;
 use std::fmt;
+use std::ops::RangeInclusive;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 use std::time::Duration;
+
+/// mpv's `speed` range.
+pub(crate) const RATE_RANGE: RangeInclusive<f64> = 0.01..=100.0;
 
 /// Where [`Player::seek`] moves the playback position. mpv keeps it within the media's bounds.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -251,7 +255,7 @@ impl Player {
         if rate.is_nan() {
             return Ok(());
         }
-        self.mpv().set("speed", rate.clamp(0.01, 100.0))
+        self.mpv().set("speed", rate.clamp(*RATE_RANGE.start(), *RATE_RANGE.end()))
     }
 
     /// A snapshot of the current state. Cheap and never blocks on mpv, so it suits render paths.

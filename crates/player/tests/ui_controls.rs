@@ -6,13 +6,11 @@
 
 mod common;
 
+use common::TIMEOUT;
 use player::prelude::*;
 use player::ui::{self, Action, Controls, Focus, Hotkeys, Key, Modifiers, PlayIcon, Request, View};
 use rust_sak::fs::{TempDir, mk_temp_dir};
 use std::time::{Duration, Instant};
-
-/// How long to wait for any expected state before failing.
-const TIMEOUT: Duration = Duration::from_secs(15);
 
 /// A player, a subscription and a controller fed from it.
 struct Harness {

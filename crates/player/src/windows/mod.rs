@@ -63,27 +63,24 @@ mod d3d;
 mod thread;
 mod wgl;
 
+#[cfg(any(doc, test))]
 use crate::builder::VideoOutput;
-use crate::error::{Error, Result};
-use crate::event;
+#[cfg(doc)]
+use crate::error::Error;
+use crate::error::Result;
 use crate::player::Player;
-use crate::surface::OnFrame;
+use crate::surface::{Attachment, OnFrame};
 use std::fmt;
 use std::os::windows::io::{AsHandle, BorrowedHandle, OwnedHandle};
 use std::sync::Arc;
-use thread::Shared;
 
 /// Renders a player's video into Direct3D 11 textures on its own render thread, and publishes the newest one.
 ///
 /// Created with [`SurfaceRenderer::builder`]. Dropping it releases the render thread's OpenGL and Direct3D state and
 /// returns the thread to the pool; the player keeps playing without video.
 pub struct SurfaceRenderer {
-    shared: Arc<Shared>,
-    thread: Option<thread::Joined>,
+    attachment: Attachment<Frame, thread::Joined>,
     adapter: AdapterLuid,
-    /// The player's state shared with its event thread, told when this renderer goes away. Holding it does not keep
-    /// the player alive.
-    player: Arc<event::Shared>,
 }
 
 impl SurfaceRenderer {
@@ -95,27 +92,17 @@ impl SurfaceRenderer {
     /// Sets the size of the frames to render, in pixels. Until it is set, and while either dimension is zero, no
     /// frame is published. A change is rendered right away, also while paused.
     pub fn set_size(&self, width: u32, height: u32) {
-        self.shared.set_size(width, height);
+        self.attachment.set_size(width, height);
     }
 
     /// The newest published frame, if any. Never waits on mpv or on the render thread.
     pub fn latest(&self) -> Option<Frame> {
-        self.shared.latest()
+        self.attachment.latest()
     }
 
     /// The adapter the frames' textures are on.
     pub fn adapter(&self) -> AdapterLuid {
         self.adapter
-    }
-}
-
-impl Drop for SurfaceRenderer {
-    fn drop(&mut self) {
-        crate::surface::detached(&self.player);
-        self.shared.shutdown();
-        if let Some(thread) = self.thread.take() {
-            thread.join();
-        }
     }
 }
 
@@ -162,13 +149,10 @@ impl SurfaceRendererBuilder {
     /// LUID asked for, or if the OpenGL driver cannot share textures with Direct3D 11 on the adapter. The player keeps
     /// working.
     pub fn build(self) -> Result<SurfaceRenderer> {
-        if self.player.video_output() != VideoOutput::Render {
-            return Err(Error::Render("the player was not built with VideoOutput::Render".into()));
-        }
-        let shared = Arc::new(Shared::default());
-        let (thread, adapter) = thread::spawn(&self.player, self.adapter, self.on_frame, Arc::clone(&shared))?;
+        crate::render::require_render_output(&self.player)?;
+        let (attachment, adapter) = thread::spawn(&self.player, self.adapter, self.on_frame)?;
         crate::surface::attached(&self.player);
-        Ok(SurfaceRenderer { shared, thread: Some(thread), adapter, player: Arc::clone(self.player.shared()) })
+        Ok(SurfaceRenderer { attachment, adapter })
     }
 }
 

@@ -1,6 +1,7 @@
 //! [`Options`], the Video.js player options that concern the UI, and their parts.
 
 use crate::error::{Error, Result};
+use crate::player::RATE_RANGE;
 use crate::ui::keys::Key;
 use std::fmt;
 use std::str::FromStr;
@@ -164,10 +165,10 @@ impl OptionsBuilder {
     /// (`aspectRatio`).
     pub fn build(self) -> Result<Options> {
         let mut options = self.options;
-        if let Some(rate) = options.playback_rates.iter().find(|rate| !(0.01..=100.0).contains(*rate)) {
+        if let Some(rate) = options.playback_rates.iter().find(|rate| !RATE_RANGE.contains(*rate)) {
             return Err(Error::InvalidOption {
                 name: "playbackRates".into(),
-                message: format!("{rate} is not within the accepted range 0.01..=100.0"),
+                message: format!("{rate} is not within the accepted range {RATE_RANGE:?}"),
             });
         }
         if let Some(text) = self.aspect_ratio {

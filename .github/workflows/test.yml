@@ -216,7 +216,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo mount -t tmpfs none /dev/dri
-          cargo test -p player-gpui --target ${{ matrix.target }} -- warns_once_without_a_render_node
+          cargo test -p player-gpui --target ${{ matrix.target }} -- warns_once_when_it_cannot_render
         env:
           LIBGL_ALWAYS_SOFTWARE: "1"
           GALLIUM_DRIVER: llvmpipe

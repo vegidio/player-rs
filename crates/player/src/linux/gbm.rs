@@ -271,25 +271,13 @@ impl Slot {
             gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MIN_FILTER, glow::NEAREST as i32);
             gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAG_FILTER, glow::NEAREST as i32);
             gl.bind_texture(glow::TEXTURE_2D, None);
-            let fbo = match gl.create_framebuffer() {
-                Ok(fbo) => fbo,
+            match crate::gl::framebuffer(gl, glow::TEXTURE_2D, texture, "dma-buf's") {
+                Ok(fbo) => Ok(Slot { fbo, texture, _image: image, buffer }),
                 Err(error) => {
                     gl.delete_texture(texture);
-                    return Err(Error::Render(error));
+                    Err(error)
                 }
-            };
-            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fbo));
-            gl.framebuffer_texture_2d(glow::FRAMEBUFFER, glow::COLOR_ATTACHMENT0, glow::TEXTURE_2D, Some(texture), 0);
-            let status = gl.check_framebuffer_status(glow::FRAMEBUFFER);
-            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
-            let slot = Slot { fbo, texture, _image: image, buffer };
-            if status != glow::FRAMEBUFFER_COMPLETE {
-                slot.delete(gl);
-                return Err(Error::Render(format!(
-                    "the dma-buf cannot be drawn into: its framebuffer is incomplete (status {status:#x})"
-                )));
             }
-            Ok(slot)
         }
     }
 

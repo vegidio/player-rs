@@ -163,9 +163,11 @@ impl ControlsView {
             view.played = (view.played * width).round() / width;
             view.buffered = (view.buffered * width).round() / width;
         }
-        let mut drawn = view.clone();
-        drawn.next_deadline = self.view.next_deadline;
-        if drawn != self.view && view.controls {
+        // Compared without the deadline, which changes nothing drawn.
+        let deadline = std::mem::replace(&mut view.next_deadline, self.view.next_deadline);
+        let changed = view != self.view;
+        view.next_deadline = deadline;
+        if changed && view.controls {
             if view.control_bar_visible != self.view.control_bar_visible {
                 self.fade.generation += 1;
                 self.fade.out_until = (!view.control_bar_visible).then_some(now + ui::FADE_OUT);
@@ -213,8 +215,12 @@ impl ControlsView {
     /// Logs a request mpv rejected; there is nobody else to tell.
     fn check(result: player::Result<()>) {
         if let Err(error) = result {
-            log::warn!("player_gpui: {error}");
+            Self::warn(&error);
         }
+    }
+
+    fn warn(error: &player::Error) {
+        log::warn!("player_gpui: {error}");
     }
 
     /// Performs `action`, as a control or an action does.
@@ -222,7 +228,7 @@ impl ControlsView {
         match self.controls.perform(action, self.now()) {
             Ok(Some(Request::ToggleFullscreen)) => self.toggle_fullscreen(window, cx),
             Ok(_) => {}
-            Err(error) => Self::check(Err(error)),
+            Err(error) => Self::warn(&error),
         }
         self.refresh(cx);
     }
@@ -265,7 +271,7 @@ impl ControlsView {
             }
             Err(error) => {
                 cx.stop_propagation();
-                Self::check(Err(error));
+                Self::warn(&error);
             }
         }
         self.refresh(cx);
@@ -316,17 +322,25 @@ impl ControlsView {
         ui::bars::fraction(f64::from(x), f64::from(left), f64::from(width))
     }
 
+    fn seek_fraction(&self, x: Pixels) -> f64 {
+        Self::fraction(x, self.seek_bounds.get())
+    }
+
+    fn volume_fraction(&self, x: Pixels) -> f64 {
+        Self::fraction(x, self.volume_bounds.get())
+    }
+
     fn seek_pressed(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
         if self.view.seekable {
             self.drag = Some(Drag::Seek);
-            let fraction = Self::fraction(position.x, self.seek_bounds.get());
+            let fraction = self.seek_fraction(position.x);
             Self::check(self.controls.seek_press(fraction, self.now()));
         }
         self.refresh(cx);
     }
 
     fn seek_hover(&mut self, position: Option<Point<Pixels>>, cx: &mut Context<Self>) {
-        let fraction = position.map(|position| Self::fraction(position.x, self.seek_bounds.get()));
+        let fraction = position.map(|position| self.seek_fraction(position.x));
         if self.seek_hovered != fraction.is_some() {
             self.seek_hovered = fraction.is_some();
             cx.notify();
@@ -337,7 +351,7 @@ impl ControlsView {
 
     fn volume_pressed(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
         self.drag = Some(Drag::Volume);
-        let fraction = Self::fraction(position.x, self.volume_bounds.get());
+        let fraction = self.volume_fraction(position.x);
         Self::check(self.controls.volume_drag(fraction, self.now()));
         self.refresh(cx);
     }
@@ -352,11 +366,11 @@ impl ControlsView {
         let now = self.now();
         match self.drag {
             Some(Drag::Seek) => {
-                let fraction = Self::fraction(event.position.x, self.seek_bounds.get());
+                let fraction = self.seek_fraction(event.position.x);
                 Self::check(self.controls.seek_drag(fraction, now));
             }
             Some(Drag::Volume) => {
-                let fraction = Self::fraction(event.position.x, self.volume_bounds.get());
+                let fraction = self.volume_fraction(event.position.x);
                 Self::check(self.controls.volume_drag(fraction, now));
             }
             None => return,
@@ -369,7 +383,7 @@ impl ControlsView {
         let now = self.now();
         let drag = self.drag.take();
         if drag == Some(Drag::Seek) {
-            let fraction = Self::fraction(event.position.x, self.seek_bounds.get());
+            let fraction = self.seek_fraction(event.position.x);
             Self::check(self.controls.seek_release(fraction, now));
         }
         let pressed = std::mem::take(&mut self.pressed);

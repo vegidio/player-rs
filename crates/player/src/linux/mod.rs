@@ -70,16 +70,15 @@ mod egl;
 mod gbm;
 mod thread;
 
+#[cfg(any(doc, test))]
 use crate::builder::VideoOutput;
 use crate::error::{Error, Result};
-use crate::event;
 use crate::player::Player;
-use crate::surface::OnFrame;
+use crate::surface::{Attachment, OnFrame};
 use std::fmt;
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use std::sync::Arc;
 use std::thread::JoinHandle;
-use thread::Shared;
 
 /// `DRM_FORMAT_MOD_LINEAR`: rows one after the other, the layout every importer of dma-bufs understands.
 pub const MODIFIER_LINEAR: u64 = gbm::LINEAR;
@@ -89,13 +88,9 @@ pub const MODIFIER_LINEAR: u64 = gbm::LINEAR;
 /// Created with [`SurfaceRenderer::builder`]. Dropping it stops the render thread and releases its OpenGL, EGL and
 /// GBM state; the player keeps playing without video.
 pub struct SurfaceRenderer {
-    shared: Arc<Shared>,
-    thread: Option<JoinHandle<()>>,
+    attachment: Attachment<Frame, JoinHandle<()>>,
     device: DrmDevice,
     modifier: u64,
-    /// The player's state shared with its event thread, told when this renderer goes away. Holding it does not keep
-    /// the player alive.
-    player: Arc<event::Shared>,
 }
 
 impl SurfaceRenderer {
@@ -112,12 +107,12 @@ impl SurfaceRenderer {
     /// Sets the size of the frames to render, in pixels. Until it is set, and while either dimension is zero, no
     /// frame is published. A change is rendered right away, also while paused.
     pub fn set_size(&self, width: u32, height: u32) {
-        self.shared.set_size(width, height);
+        self.attachment.set_size(width, height);
     }
 
     /// The newest published frame, if any. Never waits on mpv or on the render thread.
     pub fn latest(&self) -> Option<Frame> {
-        self.shared.latest()
+        self.attachment.latest()
     }
 
     /// The DRM device the frames' buffers are on.
@@ -129,16 +124,6 @@ impl SurfaceRenderer {
     /// [`SurfaceRendererBuilder::modifiers`].
     pub fn modifier(&self) -> u64 {
         self.modifier
-    }
-}
-
-impl Drop for SurfaceRenderer {
-    fn drop(&mut self) {
-        crate::surface::detached(&self.player);
-        self.shared.shutdown();
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
-        }
     }
 }
 
@@ -195,22 +180,13 @@ impl SurfaceRendererBuilder {
     /// no OpenGL context can be created on it, or if its driver cannot allocate and import a single-plane buffer with
     /// any of the modifiers offered. The player keeps working.
     pub fn build(self) -> Result<SurfaceRenderer> {
-        if self.player.video_output() != VideoOutput::Render {
-            return Err(Error::Render("the player was not built with VideoOutput::Render".into()));
-        }
+        crate::render::require_render_output(&self.player)?;
         if self.modifiers.is_empty() {
             return Err(Error::Render("no DRM format modifier was offered".into()));
         }
-        let shared = Arc::new(Shared::default());
-        let started = thread::spawn(&self.player, self.device, self.modifiers, self.on_frame, Arc::clone(&shared))?;
+        let started = thread::spawn(&self.player, self.device, self.modifiers, self.on_frame)?;
         crate::surface::attached(&self.player);
-        Ok(SurfaceRenderer {
-            shared,
-            thread: Some(started.thread),
-            device: started.device,
-            modifier: started.modifier,
-            player: Arc::clone(self.player.shared()),
-        })
+        Ok(SurfaceRenderer { attachment: started.attachment, device: started.device, modifier: started.modifier })
     }
 }
 

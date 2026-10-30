@@ -3,26 +3,16 @@
 //! of the test pattern (many colours, black bars, top/bottom asymmetry) rather than exact images, so different
 //! software rasterisers cannot make them flaky. Waiting is always done on channels with a deadline, never with sleeps.
 
-mod common {
-    pub mod gl;
-}
+mod common;
+#[path = "common/gl.rs"]
+mod gl;
 
-use common::gl::{self, Framebuffer, Gl, Image};
+use common::{TEST_SOURCE, TEST_SOURCE_WITH_AUDIO, TIMEOUT, bounded_drop, render_player, wait_position_past};
+use gl::{Framebuffer, Gl, Image};
 use player::prelude::*;
 use std::collections::HashSet;
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
-
-/// Generated 160x120 video, long enough not to end during a test.
-const TEST_SOURCE: &str = "av://lavfi:testsrc=duration=30:size=160x120:rate=25";
-
-/// The same video with a sine tone, for the scenarios where playback must go on without video: without audio, mpv
-/// ends the media once video is gone.
-const TEST_SOURCE_WITH_AUDIO: &str =
-    "av://lavfi:testsrc=duration=30:size=160x120:rate=25[out0];sine=frequency=440:duration=30[out1]";
-
-/// How long to wait for anything expected before failing.
-const TIMEOUT: Duration = Duration::from_secs(15);
 
 /// A render player, its render context and the channel its `on_frame` notifications arrive on, with the GL context
 /// they draw with. Declared so the render context is dropped before the GL context.
@@ -31,15 +21,6 @@ struct Rig {
     frames: Receiver<()>,
     player: Player,
     gl: Gl,
-}
-
-fn render_player(autoplay: Autoplay) -> Player {
-    Player::builder()
-        .video_output(VideoOutput::Render)
-        .autoplay(autoplay)
-        .mpv_option("ao", "null")
-        .build()
-        .expect("the player builds")
 }
 
 /// Creates a render context for `player` on `gl`, notifying on the returned channel.
@@ -290,27 +271,6 @@ fn video_size() {
     });
     assert_eq!(announced, Some((160, 120)));
     assert_eq!(rig.player.state().video_size, Some((160, 120)));
-}
-
-/// Waits until the player's position is past `after`, reading events; fails after [`TIMEOUT`].
-fn wait_position_past(events: &Events, after: Duration) {
-    let deadline = Instant::now() + TIMEOUT;
-    loop {
-        let left = deadline.saturating_duration_since(Instant::now());
-        match events.recv_timeout(left) {
-            Some(Event::PositionChanged(Some(position))) if position > after => return,
-            Some(_) => {}
-            None => panic!("timed out waiting for the position to pass {after:?}"),
-        }
-    }
-}
-
-/// Runs `drop` and checks that it returns within one second.
-fn bounded_drop<T>(value: T, what: &str) {
-    let start = Instant::now();
-    drop(value);
-    let elapsed = start.elapsed();
-    assert!(elapsed < Duration::from_secs(1), "dropping {what} took {elapsed:?}");
 }
 
 #[test]

@@ -7,28 +7,18 @@ use super::{DrmDevice, Frame};
 use crate::error::{Error, Result};
 use crate::player::Player;
 use crate::render::{RenderContext, RenderTarget};
-use crate::surface::OnFrame;
+use crate::surface::{self, Attachment, Backend, OnFrame, RING};
 use glow::HasContext;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::mpsc;
 use std::thread::JoinHandle;
-
-/// Buffers in the ring: a published frame is overwritten only after two newer ones are published.
-const RING: usize = 3;
-
-/// How long to wait for the GPU to finish a frame before giving up on it, in nanoseconds.
-const FENCE_TIMEOUT: i32 = 1_000_000_000;
 
 /// The size of the buffer allocated to check that a node can render with the modifiers asked for.
 const PROBE_SIZE: (u32, u32) = (64, 64);
 
-/// What the render thread and the [`SurfaceRenderer`](super::SurfaceRenderer) share.
-pub(super) type Shared = crate::surface::Shared<Frame>;
-
 /// What a started render thread renders on.
 pub(super) struct Started {
-    pub(super) thread: JoinHandle<()>,
+    pub(super) attachment: Attachment<Frame, JoinHandle<()>>,
     pub(super) device: DrmDevice,
     pub(super) modifier: u64,
 }
@@ -39,40 +29,25 @@ pub(super) fn spawn(
     device: Option<DrmDevice>,
     modifiers: Vec<u64>,
     on_frame: OnFrame,
-    shared: Arc<Shared>,
 ) -> Result<Started> {
-    let (ready, initialised) = mpsc::sync_channel(1);
-    // Only used to create the render context, then dropped: a renderer must not keep the player from stopping.
-    let player = player.clone();
-    let thread = std::thread::Builder::new()
-        .name("player-surface".into())
-        .spawn(move || {
-            let renderer = Gpu::select(device, &modifiers)
-                .and_then(|gpu| Renderer::new(&player, gpu, modifiers, on_frame, shared));
-            drop(player);
-            match renderer {
-                Ok(renderer) => {
-                    let _ = ready.send(Ok((renderer.gpu.node.device, renderer.gpu.modifier)));
-                    renderer.run();
-                }
-                Err(error) => {
-                    let _ = ready.send(Err(error));
-                }
-            }
-        })
-        .map_err(|error| Error::Render(format!("could not start the render thread: {error}")))?;
-
-    match initialised.recv() {
-        Ok(Ok((device, modifier))) => Ok(Started { thread, device, modifier }),
-        Ok(Err(error)) => {
-            let _ = thread.join();
-            Err(error)
-        }
-        Err(_) => {
-            let _ = thread.join();
-            Err(Error::Render("the render thread stopped while starting".into()))
-        }
-    }
+    let (attachment, (device, modifier)) =
+        surface::start(player, surface::spawn_thread, on_frame, move |player, shared| {
+            let gpu = Gpu::select(device, &modifiers)?;
+            let signal = Arc::clone(shared);
+            // SAFETY: the context is current on this thread, where the render context is used and dropped (before
+            // the renderer), and it outlives the render context. The node stays open until after that drop.
+            let render = unsafe {
+                RenderContext::with_drm_device(
+                    player,
+                    egl::get_proc_address,
+                    move || signal.mpv_frame(),
+                    Some(gpu.device.node_fd()),
+                )
+            }?;
+            let started = (gpu.node.device, gpu.modifier);
+            Ok((Renderer { ring: vec![], gpu, modifiers }, render, started))
+        })?;
+    Ok(Started { attachment, device, modifier })
 }
 
 /// A DRM node with a GBM device, an EGL display and a current GL context on it. Declared in drop order: the context
@@ -137,75 +112,38 @@ fn message(error: Error) -> String {
     }
 }
 
-/// The render thread's state. Everything GL-related is released in `Drop` while the context is still current, then
-/// the context, display, GBM device and node, with `gpu`.
+/// The render thread's GL state. The ring is released while the context is still current, then the context, display,
+/// GBM device and node go, with `gpu`.
 struct Renderer {
-    render: Option<RenderContext>,
     ring: Vec<Slot>,
     gpu: Gpu,
     modifiers: Vec<u64>,
-    /// The size of the buffers in `ring`.
-    size: Option<(u32, u32)>,
-    next: usize,
-    sequence: u64,
-    shared: Arc<Shared>,
-    on_frame: OnFrame,
 }
 
-impl Renderer {
-    fn new(player: &Player, gpu: Gpu, modifiers: Vec<u64>, on_frame: OnFrame, shared: Arc<Shared>) -> Result<Renderer> {
-        let signal = Arc::clone(&shared);
-        // SAFETY: the context is current on this thread, where the render context is used and dropped (first, in
-        // `Drop`), and it outlives the render context. The node stays open until after that drop.
-        let render = unsafe {
-            RenderContext::with_drm_device(
-                player,
-                egl::get_proc_address,
-                move || signal.mpv_frame(),
-                Some(gpu.device.node_fd()),
-            )
-        }?;
-        Ok(Renderer {
-            render: Some(render),
-            ring: vec![],
-            gpu,
-            modifiers,
-            size: None,
-            next: 0,
-            sequence: 0,
-            shared,
-            on_frame,
-        })
+impl Backend for Renderer {
+    type Frame = Frame;
+
+    fn rebuild(&mut self, width: u32, height: u32) -> Result<()> {
+        let Gpu { gl, context, display, device, .. } = &self.gpu;
+        for _ in 0..RING {
+            self.ring.push(Slot::new(device, display, context, gl, (width, height), &self.modifiers)?);
+        }
+        Ok(())
     }
 
-    fn run(mut self) {
-        while let Some(size) = self.shared.wait() {
-            let render = self.render.as_mut().expect("the render context lives until the drop");
-            // Clears mpv's update flag. A redraw request is rendered like a new frame.
-            render.update();
-            if let Some(size) = size.filter(|&(width, height)| width > 0 && height > 0) {
-                // A frame that cannot be drawn is skipped; the next signal tries again.
-                let _ = self.draw(size);
-            }
-        }
-    }
-
-    /// Renders the current picture into the next buffer, waits for the GPU to finish it, publishes it and notifies.
-    fn draw(&mut self, (width, height): (u32, u32)) -> Result<()> {
-        if self.size != Some((width, height)) {
-            self.rebuild(width, height)?;
-        }
-        let slot = &self.ring[self.next];
-        self.next = (self.next + 1) % RING;
-
-        let render = self.render.as_mut().expect("the render context lives until the drop");
+    fn draw(
+        &mut self,
+        render: &mut RenderContext,
+        slot: usize,
+        (width, height): (u32, u32),
+        sequence: u64,
+    ) -> Result<Frame> {
+        let slot = &self.ring[slot];
         // Unflipped: the picture's top row goes to the buffer's first row, which every importer reads as the top.
         render.render(RenderTarget { fbo: slot.fbo.0.get(), width, height }, false)?;
         // Another API reads the buffer next, and not every driver orders it after GL's writes.
-        finish(&self.gpu.gl)?;
-
-        self.sequence += 1;
-        self.shared.publish(Frame {
+        crate::gl::fence_wait(&self.gpu.gl)?;
+        Ok(Frame {
             fd: Arc::clone(&slot.buffer.fd),
             device: self.gpu.node.device,
             modifier: slot.buffer.modifier,
@@ -213,55 +151,14 @@ impl Renderer {
             offset: slot.buffer.offset,
             width,
             height,
-            sequence: self.sequence,
-        });
-        render.report_swap();
-        (self.on_frame)();
-        Ok(())
+            sequence,
+        })
     }
 
-    /// Replaces the ring with buffers of the new size. Frames the host holds keep their own dma-bufs alive.
-    fn rebuild(&mut self, width: u32, height: u32) -> Result<()> {
-        self.release();
-        let Gpu { gl, context, display, device, .. } = &self.gpu;
-        for _ in 0..RING {
-            self.ring.push(Slot::new(device, display, context, gl, (width, height), &self.modifiers)?);
-        }
-        self.size = Some((width, height));
-        Ok(())
-    }
-
-    /// Deletes the ring.
     fn release(&mut self) {
-        self.size = None;
-        self.next = 0;
         for slot in self.ring.drain(..) {
             slot.delete(&self.gpu.gl);
         }
-    }
-}
-
-/// Waits until the GPU has finished the frame.
-fn finish(gl: &glow::Context) -> Result<()> {
-    // SAFETY: the context is current on this thread; the fence is deleted right after the wait.
-    unsafe {
-        let fence = gl.fence_sync(glow::SYNC_GPU_COMMANDS_COMPLETE, 0).map_err(Error::Render)?;
-        let status = gl.client_wait_sync(fence, glow::SYNC_FLUSH_COMMANDS_BIT, FENCE_TIMEOUT);
-        gl.delete_sync(fence);
-        if status != glow::ALREADY_SIGNALED && status != glow::CONDITION_SATISFIED {
-            return Err(Error::Render(format!("the GPU did not finish the frame (status {status:#x})")));
-        }
-    }
-    Ok(())
-}
-
-impl Drop for Renderer {
-    fn drop(&mut self) {
-        // mpv's render context first, with the GL context current, as mpv requires, and while the node it was given
-        // is open; then the ring's GL objects, images and bos. The context, display, GBM device and node follow,
-        // with `gpu`.
-        drop(self.render.take());
-        self.release();
     }
 }
 
@@ -351,7 +248,7 @@ pub(super) mod tests {
             gl.disable(glow::SCISSOR_TEST);
             gl.bind_framebuffer(glow::FRAMEBUFFER, None);
         }
-        finish(&first.gl).unwrap();
+        crate::gl::fence_wait(&first.gl).unwrap();
         assert_eq!(slot.buffer.modifier, gbm::LINEAR);
         let (fd, stride, offset) = (Arc::clone(&slot.buffer.fd), slot.buffer.stride, slot.buffer.offset);
         assert!(stride >= width * 4, "stride {stride}");

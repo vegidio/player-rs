@@ -159,19 +159,7 @@ impl PlayerBuilder {
 
         mpv.initialize().map_err(Error::Init)?;
 
-        let state = State {
-            idle: true,
-            position: None,
-            duration: None,
-            paused,
-            buffering: false,
-            volume: self.volume,
-            muted,
-            rate: 1.0,
-            ended: false,
-            video_size: None,
-            buffered: None,
-        };
+        let state = State::initial(paused, self.volume, muted);
         let mpv_options = self.mpv_options.into_iter().map(|(name, _)| name).collect();
         Player::start(mpv, state, self.autoplay, self.video_output, mpv_options)
     }

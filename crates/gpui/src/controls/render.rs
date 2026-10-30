@@ -300,17 +300,7 @@ impl ControlsView {
                 .cursor_pointer()
                 .tab_index(0)
                 .tooltip(|window, cx| Tooltip::new("Play Video").build(window, cx))
-                .on_click(cx.listener(|this, event: &ClickEvent, window, cx| {
-                    if !event.is_keyboard() {
-                        this.perform(Action::Play, window, cx);
-                    }
-                }))
-                .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
-                    if activates(event) {
-                        cx.stop_propagation();
-                        this.perform(Action::Play, window, cx);
-                    }
-                }))
+                .activates(Action::Play, cx)
                 // Not a click on the video. The player takes focus in place of the button, which hides at once, so
                 // the hotkeys work after it, as Video.js focuses the video.
                 .on_any_mouse_down(cx.listener(|this, _: &MouseDownEvent, window, cx| {
@@ -343,9 +333,20 @@ fn button(
         .cursor_pointer()
         .tab_index(0)
         .tooltip(move |window, cx| Tooltip::new(tooltip).build(window, cx))
-        // GPUI also clicks a focused element on Space or Enter; those are handled as keys below instead, so the
-        // global Space hotkey does not also see them.
-        .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
+        .activates(action, cx)
+        .child(content)
+}
+
+trait Activates {
+    /// Performs `action` on a click, and on Space or Enter while focused.
+    fn activates(self, action: Action, cx: &mut Context<ControlsView>) -> Self;
+}
+
+impl<E: StatefulInteractiveElement> Activates for E {
+    fn activates(self, action: Action, cx: &mut Context<ControlsView>) -> Self {
+        // GPUI also clicks a focused element on Space or Enter; those are handled as keys instead, so the global
+        // Space hotkey does not also see them.
+        self.on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
             if !event.is_keyboard() {
                 this.perform(action, window, cx);
             }
@@ -356,7 +357,7 @@ fn button(
                 this.perform(action, window, cx);
             }
         }))
-        .child(content)
+    }
 }
 
 /// Space or Enter without modifiers, which activate a focused button.

@@ -4,9 +4,7 @@ mod common;
 
 use player::prelude::*;
 use rust_sak::fs::mk_temp_dir;
-use std::time::{Duration, Instant};
-
-const TIMEOUT: Duration = Duration::from_secs(15);
+use std::time::Duration;
 
 fn player() -> Player {
     Player::builder()
@@ -18,13 +16,9 @@ fn player() -> Player {
 
 /// Waits for the media to end and returns why.
 fn wait_for_end(events: &Events) -> EndReason {
-    let deadline = Instant::now() + TIMEOUT;
-    loop {
-        match events.recv_timeout(deadline.saturating_duration_since(Instant::now())) {
-            Some(Event::Ended(reason)) => return reason,
-            Some(_) => {}
-            None => panic!("timed out waiting for the media to end"),
-        }
+    match common::wait_for(events, "the media to end", |event| matches!(event, Event::Ended(_))) {
+        Event::Ended(reason) => reason,
+        _ => unreachable!(),
     }
 }
 

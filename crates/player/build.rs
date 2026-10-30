@@ -40,6 +40,23 @@ fn mpv_version() -> &'static str {
     include_str!("mpv-version.txt").trim()
 }
 
+/// The target's `CARGO_CFG_TARGET_*` values.
+struct Target {
+    os: String,
+    arch: String,
+    env: String,
+}
+
+impl Target {
+    fn from_env() -> Self {
+        Target {
+            os: env::var("CARGO_CFG_TARGET_OS").unwrap(),
+            arch: env::var("CARGO_CFG_TARGET_ARCH").unwrap(),
+            env: env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default(),
+        }
+    }
+}
+
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-changed=mpv-version.txt");
@@ -55,9 +72,10 @@ fn main() {
         return;
     }
 
-    check_macos_deployment_target();
-    let binaries_dir = locate_binaries();
-    emit_link_directives(&binaries_dir.join("lib"));
+    let target = Target::from_env();
+    check_macos_deployment_target(&target);
+    let binaries_dir = locate_binaries(&target);
+    emit_link_directives(&target, &binaries_dir.join("lib"));
 }
 
 /// Minimum macOS version of the x86_64 archive. libmpv uses Swift, which ships with the OS only from 10.14.4: linked
@@ -67,10 +85,8 @@ const MACOS_X64_MIN_VERSION: (u32, u32) = (10, 15);
 
 /// Fails the build on x86_64 macOS unless `MACOSX_DEPLOYMENT_TARGET` is at least [`MACOS_X64_MIN_VERSION`]. A build
 /// script cannot raise the deployment target of the final link, so the app has to set it.
-fn check_macos_deployment_target() {
-    if env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos")
-        || env::var("CARGO_CFG_TARGET_ARCH").as_deref() != Ok("x86_64")
-    {
+fn check_macos_deployment_target(target: &Target) {
+    if target.os != "macos" || target.arch != "x86_64" {
         return;
     }
 
@@ -95,9 +111,9 @@ fn check_macos_deployment_target() {
 
 /// Returns the directory containing the `include/` and `lib/` subdirectories, either from the `PLAYER_BINARIES_DIR`
 /// override or by downloading + extracting the pinned release.
-fn locate_binaries() -> PathBuf {
+fn locate_binaries(target: &Target) -> PathBuf {
     // Resolve the archive name first so an unsupported target fails the same way with or without the override.
-    let archive = archive_name();
+    let archive = archive_name(target);
 
     if let Some(dir) = env::var_os("PLAYER_BINARIES_DIR") {
         let dir = PathBuf::from(dir);
@@ -142,12 +158,8 @@ fn download_and_extract(archive: &str) -> PathBuf {
 }
 
 /// Maps the Cargo target triple components to the release archive file name, e.g. `static_osx_arm64.zip`.
-fn archive_name() -> String {
-    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
-    let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
-    let target_env = env::var("CARGO_CFG_TARGET_ENV").unwrap_or_default();
-
-    archive::archive_name(&target_os, &target_arch, &target_env).unwrap_or_else(|e| panic!("player-rs: {e}"))
+fn archive_name(target: &Target) -> String {
+    archive::archive_name(&target.os, &target.arch, &target.env).unwrap_or_else(|e| panic!("player-rs: {e}"))
 }
 
 /// Downloads the given URL into memory, following redirects.
@@ -191,11 +203,8 @@ fn extract_zip(bytes: &[u8], dest: &Path) {
 }
 
 /// Resolves the link line from the archive's `mpv.pc` and tells Cargo/rustc where the libraries live and which to link.
-fn emit_link_directives(lib_dir: &Path) {
-    let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
-    let msvc = env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc");
-
-    let plan = pkgconfig::Resolver::new(&target_os, msvc, lib_dir, system_pkgconfig_dirs(&target_os))
+fn emit_link_directives(target: &Target, lib_dir: &Path) {
+    let plan = pkgconfig::Resolver::new(&target.os, target.env == "msvc", lib_dir, system_pkgconfig_dirs(target))
         .and_then(|resolver| resolver.resolve("mpv"))
         .unwrap_or_else(|e| panic!("player-rs: cannot resolve the libmpv link line: {e}"));
 
@@ -219,7 +228,7 @@ fn emit_link_directives(lib_dir: &Path) {
     // GNU `bfd` linker (the default on aarch64 Linux) can then miss back-references between them. Re-listing the set
     // in a link group (appended after the `-l` flags) resolves them. Link args only apply to this package's targets;
     // dependents use the rlib.
-    if target_os == "linux" {
+    if target.os == "linux" {
         println!("cargo:rustc-link-arg=-Wl,--start-group");
         for name in &static_libs {
             println!("cargo:rustc-link-arg=-l{name}");
@@ -230,15 +239,15 @@ fn emit_link_directives(lib_dir: &Path) {
 
 /// The host pkg-config directories searched for modules the archive does not ship, in pkg-config's order:
 /// `PKG_CONFIG_PATH`, then `PKG_CONFIG_LIBDIR` or, on Linux, the standard system directories.
-fn system_pkgconfig_dirs(target_os: &str) -> Vec<PathBuf> {
+fn system_pkgconfig_dirs(target: &Target) -> Vec<PathBuf> {
     let split = |var: &str| env::var_os(var).map(|v| env::split_paths(&v).collect::<Vec<_>>());
 
     let mut dirs = split("PKG_CONFIG_PATH").unwrap_or_default();
     if let Some(libdir) = split("PKG_CONFIG_LIBDIR") {
         dirs.extend(libdir);
-    } else if target_os == "linux" {
-        let multiarch = match env::var("CARGO_CFG_TARGET_ARCH").as_deref() {
-            Ok("x86_64") => "x86_64-linux-gnu",
+    } else if target.os == "linux" {
+        let multiarch = match target.arch.as_str() {
+            "x86_64" => "x86_64-linux-gnu",
             _ => "aarch64-linux-gnu",
         };
         for dir in [

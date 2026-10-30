@@ -72,23 +72,13 @@ impl Scratch {
             }
             gl.bind_texture(glow::TEXTURE_2D, None);
 
-            let fbo = match gl.create_framebuffer() {
-                Ok(fbo) => fbo,
+            match crate::gl::framebuffer(gl, glow::TEXTURE_2D, texture, "scratch") {
+                Ok(fbo) => Ok(Scratch { fbo, texture }),
                 Err(error) => {
                     gl.delete_texture(texture);
-                    return Err(Error::Render(error));
+                    Err(error)
                 }
-            };
-            gl.bind_framebuffer(glow::FRAMEBUFFER, Some(fbo));
-            gl.framebuffer_texture_2d(glow::FRAMEBUFFER, glow::COLOR_ATTACHMENT0, glow::TEXTURE_2D, Some(texture), 0);
-            let status = gl.check_framebuffer_status(glow::FRAMEBUFFER);
-            gl.bind_framebuffer(glow::FRAMEBUFFER, None);
-            let scratch = Scratch { fbo, texture };
-            if status != glow::FRAMEBUFFER_COMPLETE {
-                scratch.delete(gl);
-                return Err(Error::Render(format!("the scratch framebuffer is incomplete (status {status:#x})")));
             }
-            Ok(scratch)
         }
     }
 

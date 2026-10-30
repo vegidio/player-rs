@@ -125,6 +125,8 @@ pub mod windows;
 
 mod builder;
 mod event;
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
+mod gl;
 mod mpv;
 mod player;
 mod render;

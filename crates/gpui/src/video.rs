@@ -3,7 +3,9 @@
 
 use gpui_kit::*;
 use player::Player;
+#[cfg(test)]
 use std::cell::Cell;
+#[cfg(test)]
 use std::rc::Rc;
 use std::sync::Arc;
 use surface::{Frame, SurfaceRenderer};
@@ -13,6 +15,9 @@ use surface::{Frame, SurfaceRenderer};
 #[cfg_attr(target_os = "linux", path = "video/linux.rs")]
 mod surface;
 
+#[cfg(all(test, any(windows, target_os = "linux")))]
+mod pixels;
+
 /// Owns the player's surface renderer and repaints when it publishes a frame. Kept in the element's keyed state (see
 /// [`VideoPlayer`](crate::VideoPlayer)) and rendered cached, so the parent re-rendering does not re-render it.
 pub(crate) struct VideoView {
@@ -21,6 +26,7 @@ pub(crate) struct VideoView {
     /// `None` if the renderer could not be created: the view then stays black.
     renderer: Option<Arc<SurfaceRenderer>>,
     /// The size last asked of the renderer, in device pixels.
+    #[cfg(test)]
     requested: Rc<Cell<Option<(u32, u32)>>>,
     /// Notifies this view for each published frame; dropped with it.
     _frames: Option<Task<()>>,
@@ -58,6 +64,7 @@ impl VideoView {
         Self {
             player: player.clone(),
             renderer,
+            #[cfg(test)]
             requested: Rc::default(),
             _frames: task,
             #[cfg(test)]
@@ -79,6 +86,7 @@ impl Render for VideoView {
             self.renders += 1;
         }
         let renderer = self.renderer.clone();
+        #[cfg(test)]
         let requested = Rc::clone(&self.requested);
         canvas(
             move |bounds, window, _| {
@@ -89,6 +97,7 @@ impl Render for VideoView {
                 let size = (device(bounds.size.width), device(bounds.size.height));
                 // The renderer ignores a size it already has, so this does not cause a frame by itself.
                 renderer.set_size(size.0, size.1);
+                #[cfg(test)]
                 requested.set(Some(size));
                 renderer.latest()
             },
@@ -145,40 +154,26 @@ pub(crate) mod tests {
         }
     }
 
-    /// The error a Windows OpenGL driver without `WGL_NV_DX_interop2` gives, as Mesa's on CI.
+    /// The error building a renderer fails with where this machine cannot render: on Windows, an OpenGL driver
+    /// without `WGL_NV_DX_interop2`, as Mesa's on CI; on Linux, no usable DRM render node, as WSL2 without `vgem`.
     #[cfg(windows)]
-    const NO_SHARING: &str = "cannot share textures with Direct3D 11";
+    const UNAVAILABLE: &str = "cannot share textures with Direct3D 11";
+    #[cfg(target_os = "linux")]
+    const UNAVAILABLE: &str = "DRM render node is available";
 
     /// Whether the GL tests are skipped (`PLAYER_TEST_SKIP_GL`), as on CI's Windows arm64.
     fn gl_skipped() -> bool {
         std::env::var("PLAYER_TEST_SKIP_GL").is_ok_and(|value| !value.is_empty())
     }
 
-    /// Whether the OpenGL driver cannot share textures with Direct3D 11, so no renderer can be built.
-    #[cfg(windows)]
-    pub(crate) fn no_interop() -> bool {
-        static NO_INTEROP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        *NO_INTEROP.get_or_init(|| {
-            let player = Player::builder().video_output(VideoOutput::Render).mpv_option("ao", "null").build().unwrap();
-            match surface::build(&player, || {}) {
-                Ok(_) => false,
-                Err(Error::Render(message)) if message.contains(NO_SHARING) => true,
-                Err(error) => panic!("the surface renderer cannot be created: {error}"),
-            }
-        })
-    }
-
-    /// Whether no DRM render node can be rendered on, as on WSL2 without `vgem`, so no renderer can be built.
-    #[cfg(target_os = "linux")]
-    pub(crate) fn no_render_node() -> bool {
-        static NO_NODE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
-        *NO_NODE.get_or_init(|| {
-            let player = Player::builder().video_output(VideoOutput::Render).mpv_option("ao", "null").build().unwrap();
-            match surface::build(&player, || {}) {
-                Ok(_) => false,
-                Err(Error::Render(message)) if message.contains("DRM render node is available") => true,
-                Err(error) => panic!("the surface renderer cannot be created: {error}"),
-            }
+    /// Whether no renderer can be built here, for the reason [`UNAVAILABLE`] names.
+    #[cfg(any(windows, target_os = "linux"))]
+    fn render_unavailable() -> bool {
+        static UNAVAILABLE_HERE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        *UNAVAILABLE_HERE.get_or_init(|| match surface::build(&render_player(), || {}) {
+            Ok(_) => false,
+            Err(Error::Render(message)) if message.contains(UNAVAILABLE) => true,
+            Err(error) => panic!("the surface renderer cannot be created: {error}"),
         })
     }
 
@@ -189,9 +184,9 @@ pub(crate) mod tests {
             Some("PLAYER_TEST_SKIP_GL is set, so no OpenGL context is created")
         } else {
             #[cfg(windows)]
-            let reason = no_interop().then_some("the OpenGL driver cannot share textures with Direct3D 11");
+            let reason = render_unavailable().then_some("the OpenGL driver cannot share textures with Direct3D 11");
             #[cfg(target_os = "linux")]
-            let reason = no_render_node().then_some("no usable DRM render node is available (sudo modprobe vgem)");
+            let reason = render_unavailable().then_some("no usable DRM render node is available (sudo modprobe vgem)");
             #[cfg(not(any(windows, target_os = "linux")))]
             let reason = None;
             reason
@@ -208,15 +203,21 @@ pub(crate) mod tests {
 
     const TIMEOUT: Duration = Duration::from_secs(15);
 
-    /// A playing render player with media loaded, before any element exists for it.
-    fn playing() -> Player {
+    /// A render player with its audio discarded.
+    #[cfg(any(windows, target_os = "linux"))]
+    pub(crate) fn render_player() -> Player {
+        Player::builder().video_output(VideoOutput::Render).mpv_option("ao", "null").build().unwrap()
+    }
+
+    /// A playing render player with `source` loaded, before any element exists for it.
+    pub(crate) fn playing(source: &str) -> Player {
         let player = Player::builder()
             .video_output(VideoOutput::Render)
             .autoplay(Autoplay::On)
             .mpv_option("ao", "null")
             .build()
             .unwrap();
-        player.load(Source::url(TEST_SOURCE).unwrap()).unwrap();
+        player.load(Source::url(source).unwrap()).unwrap();
         player
     }
 
@@ -330,7 +331,7 @@ pub(crate) mod tests {
             return;
         }
         // Loaded before the element is first rendered, as a view constructor would.
-        let player = playing();
+        let player = playing(TEST_SOURCE);
         let harness = open(cx, &[&player]);
         let view = harness.wait_for_video(cx, 3);
         assert!(shows(cx, &view, &player));
@@ -362,7 +363,7 @@ pub(crate) mod tests {
         if cannot_show_video() {
             return;
         }
-        let (first, second) = (playing(), playing());
+        let (first, second) = (playing(TEST_SOURCE), playing(TEST_SOURCE));
         let harness = open(cx, &[&first]);
         let old = harness.wait_for_video(cx, 1).downgrade();
 
@@ -383,7 +384,7 @@ pub(crate) mod tests {
         if cannot_show_video() {
             return;
         }
-        let player = playing();
+        let player = playing(TEST_SOURCE);
         let harness = open(cx, &[&player]);
         harness.wait_for_video(cx, 1);
 
@@ -401,7 +402,7 @@ pub(crate) mod tests {
         if cannot_show_video() {
             return;
         }
-        let (first, second) = (playing(), playing());
+        let (first, second) = (playing(TEST_SOURCE), playing(TEST_SOURCE));
         let harness = open(cx, &[&first, &second]);
         harness.pump(cx, "both videos", |cx| {
             let views = live_views();
@@ -416,7 +417,7 @@ pub(crate) mod tests {
         if cannot_show_video() {
             return;
         }
-        let player = playing();
+        let player = playing(TEST_SOURCE);
         let harness = open(cx, &[&player]);
         let view = harness.wait_for_video(cx, 1);
         let scale = cx.update_window(harness.window.into(), |_, window, _| window.scale_factor()).unwrap();
@@ -471,17 +472,17 @@ pub(crate) mod tests {
         WARNINGS.with_borrow_mut(std::mem::take)
     }
 
-    /// The scenario CI's Mesa runs: the element stays black, warns once however often it is drawn, and the player
-    /// keeps working.
-    #[cfg(windows)]
+    /// The scenario of CI's Mesa on Windows, and of WSL2 without `vgem` on Linux (CI runs it with `/dev/dri` hidden):
+    /// the element stays black, warns once however often it is drawn, and the player keeps working.
+    #[cfg(any(windows, target_os = "linux"))]
     #[gpui_kit::test]
-    fn warns_once_without_interop(cx: &mut TestAppContext) {
-        if gl_skipped() || !no_interop() {
-            eprintln!("skipped: needs an OpenGL driver that cannot share textures with Direct3D 11, as Mesa's");
+    fn warns_once_when_it_cannot_render(cx: &mut TestAppContext) {
+        if gl_skipped() || !render_unavailable() {
+            eprintln!("skipped: needs a machine that cannot render, failing with \"{UNAVAILABLE}\"");
             return;
         }
         take_warnings();
-        let player = playing();
+        let player = playing(TEST_SOURCE);
         let harness = open(cx, &[&player]);
         harness.pump(cx, "the view", |_| live_views().len() == 1);
         for _ in 0..5 {
@@ -492,35 +493,9 @@ pub(crate) mod tests {
         let view = live_views().remove(0);
         assert!(cx.read(|cx| view.read(cx).renderer().is_none()), "the element stays black");
         let warnings = take_warnings();
-        let about_sharing = warnings.iter().filter(|warning| warning.contains(NO_SHARING)).count();
-        assert_eq!(about_sharing, 1, "one warning naming the reason: {warnings:?}");
-        player.set_volume(0.5).unwrap();
-        assert_eq!(player.get_property::<f64>("volume").unwrap(), 50.0);
-    }
-
-    /// The scenario of WSL2 without `vgem`: the element stays black, warns once however often it is drawn, and the
-    /// player keeps playing. CI runs it with `/dev/dri` hidden.
-    #[cfg(target_os = "linux")]
-    #[gpui_kit::test]
-    fn warns_once_without_a_render_node(cx: &mut TestAppContext) {
-        if gl_skipped() || !no_render_node() {
-            eprintln!("skipped: needs a machine with no usable DRM render node, as WSL2 without `vgem`");
-            return;
-        }
-        take_warnings();
-        let player = playing();
-        let harness = open(cx, &[&player]);
-        harness.pump(cx, "the view", |_| live_views().len() == 1);
-        for _ in 0..5 {
-            harness.update(cx, |_| {});
-            harness.draw(cx);
-        }
-
-        let view = live_views().remove(0);
-        assert!(cx.read(|cx| view.read(cx).renderer().is_none()), "the element stays black");
-        let warnings = take_warnings();
-        let about_node = warnings.iter().filter(|warning| warning.contains("DRM render node is available")).count();
-        assert_eq!(about_node, 1, "one warning naming the reason: {warnings:?}");
+        let about_it = warnings.iter().filter(|warning| warning.contains(UNAVAILABLE)).count();
+        assert_eq!(about_it, 1, "one warning naming the reason: {warnings:?}");
+        #[cfg(target_os = "linux")]
         harness.pump(cx, "playback", |_| player.state().position.is_some_and(|position| position > Duration::ZERO));
         player.set_volume(0.5).unwrap();
         assert_eq!(player.get_property::<f64>("volume").unwrap(), 50.0);

@@ -16,13 +16,14 @@ use std::rc::Rc;
 /// released and the player keeps playing without video.
 ///
 /// The player must be built with [`VideoOutput::Render`](player::VideoOutput::Render). Video is shown on macOS, and on
-/// Windows with a patched GPUI (see the [crate's setup](crate#setup)). On Linux, and wherever the video cannot be
-/// shown, the element is black, while audio and the controls keep working.
+/// Windows and Linux with a patched GPUI (see the [crate's setup](crate#setup)). Wherever the video cannot be shown,
+/// the element is black, while audio and the controls keep working.
 #[derive(IntoElement)]
 pub struct VideoPlayer {
     id: ElementId,
     player: Player,
-    options: ui::Options,
+    /// `None` for the default, which is only built when the options are read.
+    options: Option<ui::Options>,
     on_fullscreen_change: Option<FullscreenCallback>,
     style: StyleRefinement,
 }
@@ -52,7 +53,7 @@ impl VideoPlayer {
         Self {
             id: id.into(),
             player: player.clone(),
-            options: ui::Options::default(),
+            options: None,
             on_fullscreen_change: None,
             style: StyleRefinement::default(),
         }
@@ -66,7 +67,7 @@ impl VideoPlayer {
     /// With an [aspect ratio](ui::OptionsBuilder::aspect_ratio), the element's height follows its width, as in
     /// Video.js's fluid mode, unless a height is set on the element.
     pub fn options(mut self, options: ui::Options) -> Self {
-        self.options = options;
+        self.options = Some(options);
         self
     }
 
@@ -88,11 +89,13 @@ impl Styled for VideoPlayer {
 impl RenderOnce for VideoPlayer {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
         let Self { id, player, options, on_fullscreen_change, style } = self;
-        let slot = window.use_keyed_state(id.clone(), cx, |window, cx| Slot::new(&player, options.clone(), window, cx));
+        let slot = window.use_keyed_state(id.clone(), cx, |window, cx| {
+            Slot::new(&player, options.clone().unwrap_or_default(), window, cx)
+        });
         let controls = slot.update(cx, |slot, cx| {
             if !Player::ptr_eq(slot.controls.read(cx).player(), &player) {
                 // The previous views, and with them the renderer, are released once nothing holds them.
-                *slot = Slot::new(&player, options, window, cx);
+                *slot = Slot::new(&player, options.unwrap_or_default(), window, cx);
             }
             slot.controls.clone()
         });
