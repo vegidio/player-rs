@@ -240,7 +240,7 @@ let view = controls.view(now);
 Play a file or URL from the command line:
 
 ```sh
-cargo run -p player-rs --example play -- path/to/movie.mp4
+cargo run -p player-rs --example listen -- path/to/movie.mp4
 ```
 
 ## Supported platforms
@@ -261,7 +261,7 @@ Requirements: a stable Rust toolchain (edition 2024) and network access on the f
 cargo build
 cargo test --workspace --exclude xtask
 cargo run -p player-rs --example version
-cargo run -p player-rs --example play -- path/to/movie.mp4
+cargo run -p player-rs --example listen -- path/to/movie.mp4
 ```
 
 The tests need no media files, display, GPU or sound device: they play media mpv generates itself (`av://lavfi:testsrc`) or WAV files they write to a temporary directory, with mpv's null audio output. The render tests (`tests/render.rs`) draw into an offscreen framebuffer of a headless, software-rendered OpenGL context:

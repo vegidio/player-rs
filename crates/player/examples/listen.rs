@@ -1,8 +1,8 @@
 //! Plays a local file or a URL without a window (audio only), printing the player's events until the media ends.
 //!
 //! ```sh
-//! cargo run -p player-rs --example play -- path/to/movie.mp4
-//! cargo run -p player-rs --example play -- https://example.com/movie.mp4
+//! cargo run -p player-rs --example listen -- path/to/movie.mp4
+//! cargo run -p player-rs --example listen -- https://example.com/movie.mp4
 //! ```
 
 use player::prelude::*;
@@ -11,7 +11,7 @@ use std::process::ExitCode;
 
 fn main() -> Result<ExitCode> {
     let Some(arg) = std::env::args().nth(1) else {
-        eprintln!("usage: play <path or URL>");
+        eprintln!("usage: listen <path or URL>");
         return Ok(ExitCode::from(2));
     };
     // An existing path is a file even if it looks like a URL, such as `http://clip.mp4` (a directory named `http:`).
