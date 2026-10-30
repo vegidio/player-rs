@@ -52,7 +52,7 @@ None.
   - "Video element" and "GPUI platform coverage" extend video to Linux.
   - "Windows video setup" becomes "Patched GPUI setup", which covers Windows and Linux.
   - A new requirement, "Linux video unavailable at run time", covers black with one warning when the dma-buf cannot be made or imported.
-  - A new requirement, "Render node and layout from GPUI", covers the core renderer following GPUI's device and modifiers.
+  - A new requirement, "Render device and layout from GPUI", covers the core renderer following GPUI's device and modifiers.
 - `video-render`: a new requirement, "Correct picture on software OpenGL", covers mpv's dumb mode on Mesa's software renderers.
 
 ## Impact
@@ -81,4 +81,4 @@ None.
   - Only the `gpui-pre` backend is covered. Apps on GPUI-Kit's `gpui-fast` backend fail the build on the marker, as on Windows.
   - macOS still needs no patch.
 - **Outward-facing steps** (each needs the user's go-ahead): pushing the fork's new commits and the `0.3.10-surfaces.2` tag.
-- **Size**: 17 tasks (two core tasks added during implementation). This is slice 9 of the `add-player` series (see design.md). It depends on slices 5, 7 and 8.
+- **Size**: 17 tasks, two over the project's limit of 15. The two core tasks (5.1 and 5.2, decision 10) were added during implementation, after the manual check found the core's own frames black on llvmpipe. The user chose to keep them in this change rather than split them out: slice 9's Linux pixel tests and manual checks only pass with them, so neither part would leave the project working on its own. This is slice 9 of the `add-player` series (see design.md). It depends on slices 5, 7 and 8.

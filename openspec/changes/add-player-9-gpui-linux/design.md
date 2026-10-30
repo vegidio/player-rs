@@ -59,6 +59,7 @@ The `add-player` series. **This change is slice 9.**
 | 10+ | (to be planned) | The `gpui-fast` fork for apps on that backend; menus (rate list, tracks), captions, poster drawing, skip buttons, touch behaviour; hiding the cursor when inactive (needs a GPUI API); HDR surfaces if GPUI gains them; precise GL/D3D adapter matching on hybrid laptops; Linux hardware verification (Mesa Intel/AMD, NVIDIA proprietary, VA-API/NVDEC zero-copy, tiled modifiers, `texture_from_dmabuf_fd` itself) | 8, 9 | pending |
 
 Changes from the plan in slice 8's table:
+- **17 tasks, over the limit of 15.** Decision 10's two core tasks were added during implementation. The user accepted the exception rather than a separate slice, since slice 9 does not work on llvmpipe without them.
 - **No `linux-video` feature.** Linux video is always on, and Linux builds need the patch, as Windows ended up (slice 7's late change). The user chose this.
 - **A LINEAR Vulkan import without modifiers** is added next to `texture_from_dmabuf_fd`. The user chose this, so that lavapipe, the only Vulkan driver here that imports dma-bufs, can test GPUI's Vulkan path.
 - **The headless pixel tests run on lavapipe and on llvmpipe's GL**, not on lavapipe through wgpu-hal's modifier import, which lavapipe lacks.
@@ -240,6 +241,8 @@ The same mechanism as Windows (slice 7, decision 6): a marker `const` named in `
   - **Draw path.** A core renderer plays a static four-quadrant lavfi picture. Its frame is painted through `paint_surface` with `fit`, then checked for quadrant colours, placement, black bars, and repeated paints of the same buffer (the cache). This replaces Windows' test-made shared texture, because no test-only dma-buf allocator exists without GBM FFI, and the core already is one.
   - **Real video.** The solid-colour-fields clip through `VideoPlayer` with controls off, checked within 3%, upright and letterboxed in a 16:9 element, on the core's own software-renderer default (decision 10).
   - **Warn once.** A buffer GPUI cannot import is painted for several frames, and exactly one warning is logged. A test-only bad layout (wrong fourcc) makes the import fail on any driver.
+  - **Controls over the video** (added at verification). The fields clip through `VideoPlayer` with its controls on and never hiding: the control bar's colour over the yellow field and over the black bars, and the video above it.
+- **No DRM device** (added at verification). `warns_once_without_a_render_node`, in `video.rs` beside Windows' `warns_once_without_interop`: the element stays black, one warning names the missing node, and playback goes on. It runs only where no node is usable, so CI runs it last with `/dev/dri` covered by a tmpfs; locally, `unshare -rm` with a tmpfs over `/dev/dri` does the same without root.
 - **The `VideoView` harness tests** now run on Linux. They return early on "no usable DRM render node", as the core tests do.
 - **Both backends on CI and locally.** The Linux test step runs `player-gpui`'s tests twice:
   - once with `VK_DRIVER_FILES` set to lavapipe (Vulkan, LINEAR fallback)
@@ -295,6 +298,7 @@ Changes made from it: LINEAR imports at the padded width on every path (decision
   - load `vgem`, as slice 8 does
   - install Mesa 26 from the kisak PPA (`ppa:kisak/kisak-mesa`: `libegl-mesa0`, `libgl1-mesa-dri`, `libgbm1`, `mesa-vulkan-drivers` with lavapipe), the user's choice after the spike: Ubuntu's Mesa 25.2.8 lavapipe cannot import dma-bufs. The core's tests then run on Mesa 26 too, as they do locally.
   - run `player-gpui`'s tests on both backends (decision 8)
+- **Without the patch** (added at verification). The Linux lint job deletes the `gpui-pre` lines from `[patch.crates-io]`, checks `player-gpui`, and requires the first error to name `LINUX_SURFACES_REQUIRE_PATCHED_GPUI` (spec "Linux without the patched GPUI").
 - **Other legs.** Windows and macOS are unchanged, apart from using the new tag.
 
 #### CI run (task 4.2)
@@ -320,7 +324,7 @@ The manual check (task 6.1) found video black in WSLg windows, on lavapipe as we
   | `fbo-format=rgba8` | 0/4 (red drawn green) | 1/4 |
 
   The 1080p H.264 file, read back whole and checked for black pixels inside the picture, three processes per size: `scale=bilinear` drew a black frame at 918×498 once, and a grid and a black frame at 640×360 once each, with 960×540 and 1366×768 clean. `gpu-dumb-mode=yes` was clean 8/8 at 918×498, 640×360 and 500×300, and 3/3 at the other sizes.
-- **Decision.** `RenderContext::with_drm_device`, which both `RenderContext::new` and the Linux surface renderer call with the GL context current, resolves `glGetString` through the caller's loader and reads `GL_RENDERER`. If it names llvmpipe or softpipe, and mpv's `gpu-dumb-mode` and `scale` are still at their defaults (`option-info/<name>/default-value`), it sets `gpu-dumb-mode=yes` before creating mpv's render context. `scale=bilinear` was the first choice, as it keeps colour management and tone mapping, and was replaced after the manual check (task 6.1) showed its black lines. Dumb mode drops both, on software renderers only, and the Linux module docs say so.
+- **Decision.** `RenderContext::with_drm_device`, which both `RenderContext::new` and the Linux surface renderer call with the GL context current, resolves `glGetString` through the caller's loader and reads `GL_RENDERER`. If it names llvmpipe or softpipe, and the application neither set `gpu-dumb-mode` or `scale` with `PlayerBuilder::mpv_option` (the player keeps the names it was given, so an option set to mpv's default counts too) nor changed them since (they still equal `option-info/<name>/default-value`), it sets `gpu-dumb-mode=yes` before creating mpv's render context. `scale=bilinear` was the first choice, as it keeps colour management and tone mapping, and was replaced after the manual check (task 6.1) showed its black lines. Dumb mode drops both, on software renderers only, and the Linux module docs say so.
 - **Tests.** The core's surface tests drop their own `software_scaling` workaround, so they exercise the default. `player-gpui`'s tests drop their `scale=bilinear` too. A new test plays yuv420p fields scaled down by an uneven factor (to 118×88) and checks every pixel on five frames; it failed 6/6 without the default and passed 10/10 with it. Another checks that an app's own `scale` or `gpu-dumb-mode` is kept.
 
 ### Backend / UI separation, threading, lifetimes, zero-copy

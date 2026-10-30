@@ -9,5 +9,5 @@ When a render context is created on Mesa's software OpenGL renderers (llvmpipe o
 - **THEN** every frame shows the whole video in its own colours, in every run
 
 #### Scenario: Options chosen by the application
-- **WHEN** the application builds the player with its own `scale` or `gpu-dumb-mode` option and creates a render context on llvmpipe
+- **WHEN** the application builds the player with its own `scale` or `gpu-dumb-mode` option, even one equal to mpv's default, and creates a render context on llvmpipe
 - **THEN** mpv keeps the application's option, and dumb mode is not turned on for it
