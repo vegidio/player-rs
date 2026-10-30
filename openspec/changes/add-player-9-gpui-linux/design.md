@@ -309,6 +309,10 @@ Run 41028435517 on `add-player-9-gpui-linux` (`e36047d`): both lint jobs and all
 
 Run 41103777726 on `aa17d26`, after decision 10: both lint jobs and all six legs passed on attempt 2. `player-gpui` unit tests per leg: Linux x64 and arm64 61 on lavapipe and 61 on GL llvmpipe; macOS arm64 and x64 56; Windows x64 and arm64 59, as in task 4.2's run. Attempt 1 failed on Windows arm64 while linking, before any test ran: `crates/player` and `crates/gpui` both have an example named `play`, which Cargo links to the same `examples\play.exe` (it warns of the collision on every run), and the two links collided (`LNK1104`). That predates this change and is left for a follow-up. The run before it, 41098874692 on `7174b3a` (`scale=bilinear`), also passed on attempt 2; its attempt 1 failed `controls::tests::seek_bar_arrow_keys` on Linux arm64, a seek landing 0.35 s from its target against a 0.3 s tolerance, in code this change does not touch.
 
+#### CI run (verification fixes)
+
+Run 41109999283 on `665dea4`, after the verification fixes: both lint jobs and all six legs passed on attempt 2. The lint job's new check built `player-gpui` without the patch, and the first error named `LINUX_SURFACES_REQUIRE_PATCHED_GPUI`. `player-gpui` ran 63 tests per Linux backend. `controls_are_drawn_over_the_video` passed on both Linux legs and both backends, and `warns_once_without_a_render_node` passed in the last step, with `/dev/dri` hidden. Attempt 1 failed only `controls::tests::seek_bar_arrow_keys`, on both Linux legs: the arrow-key seek landed at 34.65 s instead of 35 ± 0.3 s, the same 0.35 s miss as task 6.2's earlier run. The test predates this change and is left for a follow-up. Run 41109008965 before it failed only the new check, which read cargo's coloured output; `665dea4` turns the colours off.
+
 ### 10. Software OpenGL rendering mode in the core (added during implementation)
 
 The manual check (task 6.1) found video black in WSLg windows, on lavapipe as well as on GL llvmpipe, with one player and with two, while audio, the controls and the core's playback worked.
