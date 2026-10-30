@@ -88,7 +88,14 @@
 //! On Windows, toolkits that draw with Direct3D (GPUI among them) use `player::windows::SurfaceRenderer`. It has its
 //! own render thread, OpenGL context and Direct3D 11 device, and hands out each frame as a Direct3D 11 texture shared
 //! through an NT handle, again without a copy through the CPU and with no `unsafe` code. The module exists on Windows
-//! only, and Linux has no surface renderer yet.
+//! only.
+//!
+//! On Linux, toolkits that draw with Vulkan or EGL (GPUI among them, from a later version of `player-gpui`) use
+//! `player::linux::SurfaceRenderer`. It has its own render thread and OpenGL context on a DRM device, and hands out
+//! each frame as a single-plane RGBA dma-buf, with its fd, DRM fourcc, modifier, stride and offset, for the toolkit to
+//! import on its own device, again without a copy through the CPU and with no `unsafe` code. Pass it the toolkit's
+//! render node and the modifiers it can import, and take the newest frame on every paint. The module exists on Linux
+//! only. It is verified with software drivers only; real GPUs are not verified yet.
 //!
 //! # The UI layer
 //!
@@ -107,6 +114,8 @@
 pub mod sys;
 
 pub mod error;
+#[cfg(target_os = "linux")]
+pub mod linux;
 #[cfg(target_os = "macos")]
 pub mod macos;
 pub mod prelude;
@@ -120,7 +129,7 @@ mod mpv;
 mod player;
 mod render;
 mod source;
-#[cfg(any(target_os = "macos", windows))]
+#[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 mod surface;
 
 /// The integration tests' headless GL context, shared with the unit tests that need a real render context.

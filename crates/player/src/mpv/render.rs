@@ -25,6 +25,8 @@ pub(crate) struct RawContext {
     // mpv does not document from where it calls it.
     _loader: Box<Mutex<Loader>>,
     _callback: Box<Callback>,
+    // mpv keeps a pointer to it as a native resource for its hardware decoding interops, for the context's lifetime.
+    _drm_display: Option<Box<sys::mpv_opengl_drm_params_v2>>,
 }
 
 // SAFETY: mpv allows a render context to be used from any thread, one call at a time; `RawContext`'s methods take
@@ -32,30 +34,52 @@ pub(crate) struct RawContext {
 unsafe impl Send for RawContext {}
 
 impl RawContext {
-    /// Creates an OpenGL render context for `mpv` and installs `callback` as its update callback.
+    /// Creates an OpenGL render context for `mpv` and installs `callback` as its update callback. `drm_render_fd`
+    /// is given to mpv as `MPV_RENDER_PARAM_DRM_DISPLAY_V2`, so its VA-API interop can open the DRM device the GL
+    /// context renders on.
     ///
     /// # Safety
     ///
     /// The GL context that `loader` resolves functions for must be current on the calling thread, and must stay
-    /// current for every later call on the returned value and for its drop.
-    pub(crate) unsafe fn create(mpv: &Handle, loader: Loader, callback: Callback) -> Result<Self, c_int> {
+    /// current for every later call on the returned value and for its drop. `drm_render_fd`, if given, must be an
+    /// open DRM device that stays open until the returned value is dropped.
+    pub(crate) unsafe fn create(
+        mpv: &Handle,
+        loader: Loader,
+        callback: Callback,
+        drm_render_fd: Option<c_int>,
+    ) -> Result<Self, c_int> {
         let loader = Box::new(Mutex::new(loader));
         let callback = Box::new(callback);
+        // No display (`fd` -1): only the render node is given, for decoding.
+        let mut drm_display = drm_render_fd.map(|render_fd| {
+            Box::new(sys::mpv_opengl_drm_params_v2 {
+                fd: -1,
+                crtc_id: 0,
+                connector_id: 0,
+                atomic_request_ptr: ptr::null_mut(),
+                render_fd,
+            })
+        });
 
         let mut init = sys::mpv_opengl_init_params {
             get_proc_address: Some(get_proc_address),
             get_proc_address_ctx: ptr::from_ref::<Mutex<Loader>>(&loader).cast_mut().cast(),
         };
-        let mut params = [
+        let mut params = vec![
             param(sys::MPV_RENDER_PARAM_API_TYPE, sys::MPV_RENDER_API_TYPE_OPENGL.as_ptr().cast_mut().cast()),
             param(sys::MPV_RENDER_PARAM_OPENGL_INIT_PARAMS, (&raw mut init).cast()),
-            end(),
         ];
+        if let Some(drm_display) = &mut drm_display {
+            params.push(param(sys::MPV_RENDER_PARAM_DRM_DISPLAY_V2, ptr::from_mut(&mut **drm_display).cast()));
+        }
+        params.push(end());
 
         let mut ctx = ptr::null_mut();
         // SAFETY: the handle is valid and initialised; `params` is terminated by MPV_RENDER_PARAM_INVALID, its API
         // type is a NUL-terminated string, and `init` outlives the call. `get_proc_address_ctx` points to the boxed
-        // loader, which lives as long as the context. The caller guarantees the GL context is current.
+        // loader, and the DRM display to its box, both living as long as the context. The caller guarantees the GL
+        // context is current and the DRM device open.
         check(unsafe { sys::mpv_render_context_create(&mut ctx, mpv.as_ptr(), params.as_mut_ptr()) })?;
         let ctx = NonNull::new(ctx).ok_or(sys::MPV_ERROR_GENERIC)?;
 
@@ -69,7 +93,7 @@ impl RawContext {
             );
         }
 
-        Ok(Self { ctx, _loader: loader, _callback: callback })
+        Ok(Self { ctx, _loader: loader, _callback: callback, _drm_display: drm_display })
     }
 
     /// Whether a new frame is ready to be drawn (`MPV_RENDER_UPDATE_FRAME`).

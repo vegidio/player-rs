@@ -2,7 +2,7 @@
 //! null audio. Frames are read back on the CPU and checked for properties of the picture (many colours, black bars,
 //! where the test pattern's gradient is) rather than exact images, so different renderers cannot make them flaky.
 //! Waiting is always done on channels with a deadline, never with sleeps.
-#![cfg(any(target_os = "macos", windows))]
+#![cfg(any(target_os = "macos", windows, target_os = "linux"))]
 
 // An outer `#[path]`: with `surface/` next to this file, rustfmt and rustc disagree on where an inline module's
 // files are.
@@ -12,6 +12,9 @@ mod common {
     pub(crate) use super::gl;
 }
 
+#[cfg(target_os = "linux")]
+#[path = "surface/linux.rs"]
+mod linux;
 #[cfg(target_os = "macos")]
 #[path = "surface/macos.rs"]
 mod macos;
@@ -39,12 +42,10 @@ const FIELDS_SOURCE: &str = "av://lavfi:color=c=0xFF0000:s=32x120:r=25:d=30[r];c
 const TIMEOUT: Duration = Duration::from_secs(15);
 
 fn render_player(autoplay: Autoplay) -> Player {
-    Player::builder()
-        .video_output(VideoOutput::Render)
-        .autoplay(autoplay)
-        .mpv_option("ao", "null")
-        .build()
-        .expect("the player builds")
+    let builder = Player::builder().video_output(VideoOutput::Render).autoplay(autoplay).mpv_option("ao", "null");
+    #[cfg(target_os = "linux")]
+    let builder = linux::software_scaling(builder);
+    builder.build().expect("the player builds")
 }
 
 fn url(url: &str) -> Source {

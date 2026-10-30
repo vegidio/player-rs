@@ -78,15 +78,35 @@ impl RenderContext {
         get_proc_address: impl FnMut(&CStr) -> *const c_void + Send + 'static,
         on_frame: impl Fn() + Send + Sync + 'static,
     ) -> Result<RenderContext> {
+        // SAFETY: the caller's guarantees are `new`'s; no DRM device is given.
+        unsafe { Self::with_drm_device(player, get_proc_address, on_frame, None) }
+    }
+
+    /// [`new`](Self::new), also giving mpv the DRM device the GL context renders on, for hardware decoding.
+    ///
+    /// # Safety
+    ///
+    /// As for [`new`](Self::new); `drm_render_fd`, if given, must be an open DRM device that stays open until the
+    /// render context is dropped.
+    #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+    pub(crate) unsafe fn with_drm_device(
+        player: &Player,
+        get_proc_address: impl FnMut(&CStr) -> *const c_void + Send + 'static,
+        on_frame: impl Fn() + Send + Sync + 'static,
+        drm_render_fd: Option<c_int>,
+    ) -> Result<RenderContext> {
         if player.video_output() != VideoOutput::Render {
             return Err(Error::Render("the player was not built with VideoOutput::Render".into()));
         }
         let active = ActiveFlag::claim(player.render_active())
             .ok_or_else(|| Error::Render("the player already has a render context".into()))?;
 
-        // SAFETY: the caller guarantees the GL context is current now and for every later call and the drop.
-        let raw = unsafe { RawContext::create(player.handle(), Box::new(get_proc_address), Box::new(on_frame)) }
-            .map_err(|code| Error::Render(format!("mpv could not create the render context: {}", mpv_message(code))))?;
+        // SAFETY: the caller guarantees the GL context is current now and for every later call and the drop, and that
+        // the DRM device stays open.
+        let raw = unsafe {
+            RawContext::create(player.handle(), Box::new(get_proc_address), Box::new(on_frame), drm_render_fd)
+        }
+        .map_err(|code| Error::Render(format!("mpv could not create the render context: {}", mpv_message(code))))?;
 
         Ok(RenderContext { raw, _active: active, _mpv: Arc::clone(player.handle()) })
     }

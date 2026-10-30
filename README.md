@@ -4,7 +4,7 @@ A fast, user-friendly video player for Rust, built on [libmpv](https://mpv.io). 
 
 libmpv and everything it depends on (FFmpeg, libplacebo, libass, …) are linked **statically** from the prebuilt archives of [vegidio/binaries-mpv](https://github.com/vegidio/binaries-mpv). Programs built with `player-rs` need neither mpv nor FFmpeg installed.
 
-> **Status:** early. `player-rs` plays media and draws its video into an OpenGL framebuffer the application provides, on every supported platform (rendering on Windows arm64 is not verified by CI, see [Building](#building)). On macOS it also renders into IOSurfaces that Metal toolkits can show without a copy, and on Windows into Direct3D 11 textures shared through NT handles. `player-gpui` shows the video in a GPUI window with Video.js's controls, from the toolkit-agnostic `player::ui` layer, on macOS, and on Windows with a patched GPUI (see [Windows video](#windows-video)). Video in GPUI on Linux, and the Video.js menus, captions and poster, come in later changes.
+> **Status:** early. `player-rs` plays media and draws its video into an OpenGL framebuffer the application provides, on every supported platform (rendering on Windows arm64 is not verified by CI, see [Building](#building)). On macOS it also renders into IOSurfaces that Metal toolkits can show without a copy, on Windows into Direct3D 11 textures shared through NT handles, and on Linux into dma-bufs that Vulkan and EGL toolkits import (verified with software drivers only). `player-gpui` shows the video in a GPUI window with Video.js's controls, from the toolkit-agnostic `player::ui` layer, on macOS, and on Windows with a patched GPUI (see [Windows video](#windows-video)). Video in GPUI on Linux, and the Video.js menus, captions and poster, come in later changes.
 
 ## Workspace
 
@@ -92,11 +92,29 @@ renderer.set_size(width_px, height_px);
 - **Hybrid GPUs.** On laptops with two GPUs, OpenGL can run on another GPU than the Direct3D adapter, and building the renderer fails. Steer the app to one GPU by exporting `NvOptimusEnablement` and `AmdPowerXpressRequestHighPerformance` from the executable, or by choosing its GPU in Windows' graphics settings.
 - **Drivers.** The OpenGL driver must have `WGL_NV_DX_interop2`, as NVIDIA's, AMD's and Intel's do; Mesa's software OpenGL does not. Verified on NVIDIA (GeForce RTX 5090); AMD and Intel are unverified, and with the bundled libmpv they decode in software, as no zero-copy OpenGL interop decoder exists for them.
 
+On Linux, `player::linux::SurfaceRenderer` serves toolkits that draw with Vulkan or EGL. It has its own render thread and a surfaceless OpenGL context on the EGL display of a DRM device's GBM platform. mpv draws straight into a small ring of single-plane RGBA buffers allocated by GBM, and each frame is published, once the GPU has finished it, as a dma-buf the toolkit imports on its own device (wgpu-hal's `texture_from_dmabuf_fd`, or an EGLImage). There is no `unsafe` code and no copy of the frame, neither through the CPU nor on the GPU:
+
+```rust,ignore
+let renderer = SurfaceRenderer::builder(&player)
+    .device(toolkit_render_node)              // DrmDevice { major, minor }, from VK_EXT_physical_device_drm
+    .modifiers(toolkit_importable_modifiers)  // default: DRM_FORMAT_MOD_LINEAR only
+    .on_frame(|| request_repaint())
+    .build()?;
+renderer.set_size(width_px, height_px);
+// When painting: renderer.latest() -> Option<Frame>, with frame.fd(), fourcc(), modifier(), stride(), offset()
+```
+
+- **Take `latest()` on every paint.** A frame stays unchanged only until two newer ones are published, and its dma-buf lives as long as the frame or a duplicate of its fd.
+- **Pass your render node and modifiers.** Without `device(..)`, the renderer takes the first DRM render node, by device number, on which it can be built, which on machines with two GPUs may not be the toolkit's. Without `modifiers(..)`, buffers are linear, which every importer takes, also across GPUs; tiled layouts the toolkit can import are faster. Only single-plane layouts are used.
+- **Hardware decoding** defaults to `hwdec=vaapi,nvdec` for `VideoOutput::Render` players on Linux: VA-API on Intel and AMD, NVDEC on NVIDIA, both without copying frames, and software decoding where neither can decode. The renderer gives mpv its DRM node, which VA-API needs. `mpv_option("hwdec", ...)` overrides it. (`auto-safe`, as on Windows, is not the default on Linux: it also probes Vulkan decoding, which crashes the process on WSL2, and copy-back decoders.)
+- **Drivers.** The EGL driver needs the GBM platform, `EGL_EXT_image_dma_buf_import(_modifiers)` and `EGL_KHR_surfaceless_context`, as Mesa's and NVIDIA's have. **Only software drivers are verified** (Mesa's llvmpipe on `vgem`, see [Building](#building)). Mesa on Intel and AMD GPUs, NVIDIA's driver, tiled modifiers, and zero-copy decoding through VA-API and NVDEC are unverified.
+- **WSL2** has no DRM device for its GPU, so building the renderer fails there with "no DRM render node is available", unless `vgem` is loaded for software rendering.
+
 | OS      | Surface renderer                   | Frames                                                | Hardware decoding default     |
 |---------|------------------------------------|-------------------------------------------------------|-------------------------------|
 | macOS   | `player::macos::SurfaceRenderer`   | IOSurface-backed `CVPixelBuffer`, BGRA or NV12        | VideoToolbox                  |
 | Windows | `player::windows::SurfaceRenderer` | Direct3D 11 texture shared through an NT handle, BGRA | `auto-safe` (NVDEC on NVIDIA) |
-| Linux   | none yet                           | -                                                     | -                             |
+| Linux   | `player::linux::SurfaceRenderer`   | Single-plane dma-buf, RGBA (`DRM_FORMAT_ABGR8888`)    | `vaapi,nvdec`                 |
 
 ### GPUI
 
@@ -233,7 +251,15 @@ cargo run -p player-rs --example play -- path/to/movie.mp4
 The tests need no media files, display, GPU or sound device: they play media mpv generates itself (`av://lavfi:testsrc`) or WAV files they write to a temporary directory, with mpv's null audio output. The render tests (`tests/render.rs`) draw into an offscreen framebuffer of a headless, software-rendered OpenGL context:
 
 - **macOS:** Apple's software renderer, built in. Set `PLAYER_TEST_GL=hardware` to run them on the GPU instead. The surface tests (`tests/surface.rs`) and the `player-gpui` tests follow the same setting, and the VideoToolbox test runs only with it.
-- **Linux:** Mesa's EGL and llvmpipe (`sudo apt-get install libegl1 libegl-mesa0 libgl1-mesa-dri`; set `LIBGL_ALWAYS_SOFTWARE=1` to use llvmpipe on a machine with a GPU).
+- **Linux:** Mesa's EGL and llvmpipe (`sudo apt-get install libegl1 libegl-mesa0 libgl1-mesa-dri`; set `LIBGL_ALWAYS_SOFTWARE=1` to use llvmpipe on a machine with a GPU). The surface tests (`tests/surface/linux.rs`) also need a DRM device; without one they pass without running, and only the creation errors are checked. For software rendering, load the kernel's virtual GEM driver and let your user open its nodes, then run the tests with `LIBGL_ALWAYS_SOFTWARE=1`:
+
+  ```sh
+  sudo modprobe vgem                  # on WSL2, from Windows: wsl -u root -- modprobe vgem
+  sudo chmod 666 /dev/dri/*           # or join the video and render groups
+  LIBGL_ALWAYS_SOFTWARE=1 cargo test -p player-rs --test surface
+  ```
+
+  llvmpipe allocates through dumb buffers, which the kernel only allows on `vgem`'s card node, so the renderer uses `card0` there. On WSL2, `LIBGL_ALWAYS_SOFTWARE=1` is required with `vgem` loaded: without it, Mesa picks its D3D12 driver for the node, which cannot allocate the buffers, and the process can crash when the render thread exits. With software OpenGL the tests switch mpv to bilinear scaling, as its default scaler draws YUV video wrongly on llvmpipe. `PLAYER_TEST_GL=hardware` adds the VA-API/NVDEC test, for a machine with a GPU.
 - **Windows:** the system's OpenGL is version 1.1 without a GPU driver, too old for mpv. CI copies Mesa's `opengl32.dll` and `libgallium_wgl.dll` from [mesa-dist-win](https://github.com/pal1000/mesa-dist-win) next to the test binaries (`target/<triple>/debug/deps`) and sets `GALLIUM_DRIVER=llvmpipe`. Only the tests use them; applications keep using the system's OpenGL. Mesa has no `WGL_NV_DX_interop2`, so the Windows surface tests (`tests/surface/windows.rs`) only check there that building the renderer fails with a clear error, and skip the rest. Run them on a machine with a GPU driver for the full set; `PLAYER_TEST_GL=hardware` adds the NVDEC test. The same goes for `player-gpui`'s video tests on Windows: on Mesa, only the drawing of a test-made shared texture and the warning for a driver without the interop are checked.
 - **Windows arm64:** no software OpenGL exists (mesa-dist-win builds x64 and x86 only), so CI skips the GL tests, the surface tests among them, there by setting `PLAYER_TEST_SKIP_GL=1`. Rendering on Windows arm64 is therefore not verified by CI; it needs a machine with a GPU driver.
 

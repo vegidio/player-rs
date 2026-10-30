@@ -53,8 +53,8 @@
 //!   Override it with [`PlayerBuilder::mpv_option`](crate::PlayerBuilder::mpv_option)`("hwdec", ...)`.
 //! - **Media loaded before the renderer** shows its video once the renderer exists (see
 //!   [`SurfaceRendererBuilder::build`]).
-//! - **Platforms.** This module exists on Windows only; macOS has its own in `player::macos`, and Linux has no surface
-//!   renderer yet.
+//! - **Platforms.** This module exists on Windows only; macOS and Linux have their own in `player::macos` and
+//!   `player::linux`.
 
 // Internals: every function here taking a `glow::Context` or an `InteropDevice` needs the `wgl::Context` it was loaded
 // for to be current. That holds on the thread that created the `wgl::Context`, which is not `Send`, since nothing here

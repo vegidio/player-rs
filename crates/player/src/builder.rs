@@ -25,12 +25,12 @@ pub enum VideoOutput {
     #[default]
     Null,
     /// The application draws the video through a [`RenderContext`](crate::RenderContext), which must be created
-    /// before the first [`Player::load`], or on macOS and Windows through a surface renderer (`player::macos`,
-    /// `player::windows`). mpv opens no window of its own.
+    /// before the first [`Player::load`], or through a surface renderer (`player::macos`, `player::windows`,
+    /// `player::linux`). mpv opens no window of its own.
     ///
-    /// On macOS this also turns on VideoToolbox hardware decoding (`hwdec=videotoolbox`), and on Windows mpv's safe
-    /// automatic hardware decoding (`hwdec=auto-safe`, NVDEC on NVIDIA GPUs), whose frames reach the GPU without a
-    /// copy. mpv falls back to software decoding by itself where no such decoder can decode a file;
+    /// On macOS this also turns on VideoToolbox hardware decoding (`hwdec=videotoolbox`), on Windows mpv's safe
+    /// automatic hardware decoding (`hwdec=auto-safe`, NVDEC on NVIDIA GPUs), and on Linux VA-API or NVDEC
+    /// (`hwdec=vaapi,nvdec`: Intel and AMD GPUs, or NVIDIA GPUs), whose frames reach the GPU without a copy. mpv falls back to software decoding by itself where no such decoder can decode a file;
     /// `mpv_option("hwdec", "no")` turns it off.
     Render,
 }
@@ -133,11 +133,16 @@ impl PlayerBuilder {
         // Zero-copy hardware decoding, with mpv falling back to software decoding by itself where it cannot decode.
         // macOS: each decoded IOSurface is mapped straight into the render context's CGL context. Windows: `auto-safe`
         // only picks decoders with a GL interop, which hand their frames to the WGL context without a copy (NVDEC).
+        // Linux: the two decoders with a zero-copy EGL interop, VA-API (through dma-bufs) and NVDEC (through CUDA-GL).
+        // Not `auto-safe`, which there also tries Vulkan decoding and copy-back decoders; probing Vulkan crashes the
+        // process on WSL2, whose Vulkan driver is unloaded while its thread lives.
         if self.video_output == VideoOutput::Render {
             if cfg!(target_os = "macos") {
                 mpv.set_option("hwdec", "videotoolbox")?;
             } else if cfg!(windows) {
                 mpv.set_option("hwdec", "auto-safe")?;
+            } else if cfg!(target_os = "linux") {
+                mpv.set_option("hwdec", "vaapi,nvdec")?;
             }
         }
 
@@ -210,6 +215,8 @@ mod tests {
             "videotoolbox"
         } else if cfg!(windows) {
             "auto-safe"
+        } else if cfg!(target_os = "linux") {
+            "vaapi,nvdec"
         } else {
             "no"
         };

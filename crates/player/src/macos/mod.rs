@@ -37,8 +37,8 @@
 //!   also after the renderer is dropped.
 //! - **Media loaded before the renderer** shows its video once the renderer exists (see
 //!   [`SurfaceRendererBuilder::build`]).
-//! - **Platforms.** This module exists on macOS only. Windows and Linux have no surface renderer yet; there, use a
-//!   [`RenderContext`](crate::RenderContext) with the toolkit's OpenGL context.
+//! - **Platforms.** This module exists on macOS only; Windows and Linux have their own in `player::windows` and
+//!   `player::linux`.
 
 // Internals: every function here taking a `glow::Context` needs the `cgl::Context` it was loaded for to be current. That
 // holds on the thread that created the `cgl::Context`, which is not `Send`, since nothing here makes another current.

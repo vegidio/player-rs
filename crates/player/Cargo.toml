@@ -62,6 +62,11 @@ windows = { version = "0.62", features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 
+# `player::linux`: a surfaceless EGL context on a DRM device's GBM platform, drawing into dma-bufs. EGL and GBM are
+# called through a small hand-written FFI; both are already linked through `mpv.pc`.
+[target.'cfg(target_os = "linux")'.dependencies]
+glow = "0.16"
+
 [dev-dependencies]
 # RAII temporary directories for the local-file tests. A git dependency without a version is stripped by
 # `cargo publish`, so the crate stays publishable.
