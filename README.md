@@ -99,12 +99,19 @@ VideoPlayer::new("movie", &self.player)
 ```
 
 - **Skins.** `Skin::Default`, the default, draws the player's controls. `Skin::None` draws nothing over the video: no controls, overlays, spinner or error display.
+- **The Default skin** is a floating, translucent pill along the bottom: play, mute, the current time, the seek bar, the time display, Settings and fullscreen. Hovering the mute button opens a vertical volume slider above it; Settings opens a menu whose Speed page lists the playback rates. A ring spinner shows while loading, and an error card with **Try again** shows when media fails to load, over the bar with its controls disabled (fullscreen still works). Sizes are fixed and don't scale with the player.
+- **No big play button.** The Default skin's design has none: the bar is shown before playback starts instead, so `Parts::big_play_button` changes nothing under it.
+- **Its text is drawn in [Inter](https://rsms.me/inter/)**, which the crate embeds and registers itself the first time a player is created, so the text looks the same on every platform with no setup. Inter is licensed under the SIL Open Font License 1.1 ([`crates/gpui/assets/fonts/OFL.txt`](crates/gpui/assets/fonts/OFL.txt)). It adds about 1.2 MB to apps that use `player-gpui`.
 - **Every part is visible by default.** `Parts` hides any of them: play, volume, seek bar, current time, time display, fullscreen, Speed, big play button, spinner, error display and seek hover time. The Settings button shows while at least one of its items (today only Speed) does.
 - **Speed is offered by default**, with the rates 0.25x to 3x in steps of 0.25. Pass `playback_rates([])` or `Parts::default().speed(false)` to offer none.
 - **The time display** shows the remaining time; clicking it switches to the duration and back.
 - **Clicks and keys don't depend on the skin.** They follow the `click`, `double_click` and `hotkeys` options under every skin, `Skin::None` included.
 - **Options and skin are read once**, as in Video.js: when the element's state is created and when it's given a different player.
 - **Aspect ratio.** With one set, the element's height follows its width (Video.js's fluid mode).
+
+#### Migrating from `Action::CycleRate`
+
+`player::ui::Action::CycleRate` is gone, along with `ui::bars::next_rate`: rates are chosen on the Settings menu's Speed page. To change the rate from code, perform `Action::SetRate(rate)`, or call `Player::set_rate`.
 
 #### Migrating from `controls(false)`
 
@@ -175,6 +182,11 @@ Behaviour follows Video.js where it differs from mpv's:
 | Linux   | With the [patched GPUI](#patched-gpui), a DRM render node and a driver that imports dma-bufs | `vaapi,nvdec`                 |
 
 Wherever video can't be shown, the element is black, one warning is logged, and audio and the controls keep working. Hardware decoding can be changed with `.mpv_option("hwdec", ...)`.
+
+On every platform, two things differ from the designs and from Video.js, because GPUI can't do them:
+
+- **No backdrop blur.** The Default skin's design blurs the video behind its pill and popovers. GPUI can't blur what lies behind an element, so they're drawn in the design's translucent black without the blur: the video shows through darkened but sharp.
+- **The cursor stays visible** while the user is inactive, unlike Video.js, until GPUI offers a way to hide it on demand.
 
 ### Patched GPUI
 

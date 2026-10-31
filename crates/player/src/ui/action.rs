@@ -26,9 +26,6 @@ pub enum Action {
     StepVolume(f64),
     /// Sets the playback rate.
     SetRate(f64),
-    /// Selects the configured playback rate after the current one, wrapping around, or the first one if the current
-    /// rate is not in the list. Does nothing with no rates configured.
-    CycleRate,
     /// Enters or leaves fullscreen; returned to the frontend as [`Request::ToggleFullscreen`].
     ToggleFullscreen,
     /// Loads the last source given to the player again, and plays it whatever the autoplay mode. Does nothing if no

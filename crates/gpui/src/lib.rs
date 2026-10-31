@@ -56,7 +56,10 @@
 //!   components panic without it.
 //! - **Icons.** The app registers [`Assets`], which serves the controls' icons and falls back to GPUI-Kit's default
 //!   bundle, in place of `gpui_kit::assets::Assets`. An app with an asset source of its own composes [`Icons`], the
-//!   icons that bundle lacks, into it instead. Without either, some control icons are blank.
+//!   icons the controls draw, into it instead. Without either, some control icons are blank.
+//! - **Font.** None: the Default skin's typeface, Inter, is embedded and registers itself with GPUI's text system the
+//!   first time a player is created. It is licensed under the SIL Open Font License 1.1, shipped with the crate in
+//!   `assets/fonts/OFL.txt`.
 //! - **Player.** It must use `VideoOutput::Render`, the default video output; otherwise the element stays black and
 //!   logs a warning. It may load media before the element is first rendered.
 //! - **Windows and Linux.** Apps that build for Windows or Linux must patch GPUI in their workspace root with the fork
@@ -77,20 +80,27 @@
 //! # Controls
 //!
 //! The controls' behaviour is `player::ui`'s, shared with every frontend, and their look is the [`Skin`]'s:
-//! [`Skin::Default`], which until its designed look arrives follows Video.js 8's default skin, or [`Skin::None`],
-//! which draws nothing over the video while clicks and keys keep working. Under the Default skin:
+//! [`Skin::Default`], the designed skin, or [`Skin::None`], which draws nothing over the video while clicks and keys
+//! keep working. The Default skin has fixed sizes, whatever the player's size, and draws its text in Inter:
 //!
-//! - **Control bar**: play/pause/replay, mute with a volume bar that expands while the panel is hovered or the bar
-//!   focused, the seek bar (buffered and played parts, a time label on hover, Video.js's press, drag and release
-//!   scrubbing), the time display (the remaining time, or the duration once clicked), a playback-rate button while
-//!   the Speed setting is offered, and fullscreen. It fades out after the inactivity timeout while playing, and back
+//! - **Control bar**: a floating, rounded, translucent pill holding play/pause/replay, mute, the current time, the
+//!   seek bar (buffered and played parts, a time label on hover, Video.js's press, drag and release scrubbing), the
+//!   time display (the remaining time, or the duration once clicked), Settings while one of its items is offered, and
+//!   fullscreen. It is shown before playback starts, fades out after the inactivity timeout while playing, and back
 //!   in on input.
+//! - **Volume**: a vertical slider in a popover above the mute button, open while the button or the popover is
+//!   hovered, during a drag, or while the volume bar has focus.
+//! - **Settings menu**: a popover above the Settings button, listing each item with its value (today, Speed); the
+//!   Speed page lists the playback rates, with the current one checked. A press elsewhere closes it.
 //! - **Parts**: every part is shown by default; [`Parts`](player::ui::Parts) in the options hides any of them.
-//! - **Overlays**: the centred big play button before playback starts, the loading spinner, and the error display.
+//! - **Overlays**: no big play button, as in the skin's design; a ring spinner while loading; and an error card with
+//!   mpv's message and a Try again button, over the bar, whose controls are disabled except fullscreen.
 //! - **Pointer**: clicking the video toggles play and double-clicking toggles fullscreen, unless the options turn
 //!   them off.
 //! - **Keyboard**: clicking the player focuses it, and Tab moves through the controls in control-bar order. Keys go
-//!   to `player::ui`'s key map for the focused part: the seek-bar and volume-bar keys, and the hotkeys as configured.
+//!   to `player::ui`'s key map for the focused part: the seek-bar and volume-bar keys, the Settings menu's keys while
+//!   focus is in it (opening it from the keyboard moves focus in, and closing it returns focus to the button), and
+//!   the hotkeys as configured.
 //!   Keys it does not handle, including every key held with Ctrl, Alt or the platform key, go on to the app. The
 //!   [`TogglePlay`], [`ToggleMute`] and [`ToggleFullscreen`] actions let the app's menus drive the focused player.
 //! - **Options and skin.** [`VideoPlayer::options`] takes `player::ui::Options`, and [`VideoPlayer::skin`] the skin.
@@ -125,8 +135,9 @@
 //!   Wherever the element is black, audio and the controls keep working.
 //! - **Cursor.** Unlike Video.js, the pointer cursor stays visible while the user is inactive: GPUI has no way to hide
 //!   it on demand.
-//! - **Not yet.** The rate button cycles the rates instead of opening the Settings menu, which `player::ui` already
-//!   models. The designed Default skin, menus (Settings, tracks), captions and the poster come in later releases.
+//! - **No backdrop blur.** The Default skin's design blurs the video behind its pill and popovers; GPUI cannot blur
+//!   what lies behind an element, so on every platform they keep the design's translucent black without the blur.
+//! - **Not yet.** Track menus, captions and the poster come in later releases.
 
 // GPUI's derive macros name the `gpui` crate; through this alias they resolve to the GPUI that GPUI-Kit re-exports.
 extern crate gpui_kit as gpui;
@@ -144,6 +155,7 @@ const _: () = gpui_kit::LINUX_SURFACES_REQUIRE_PATCHED_GPUI;
 mod assets;
 mod controls;
 mod element;
+mod fonts;
 mod keys;
 #[cfg(video)]
 mod video;

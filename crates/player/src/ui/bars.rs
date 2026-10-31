@@ -77,14 +77,6 @@ pub fn rate_index(rates: &[f64], current: f64) -> Option<usize> {
     rates.iter().position(|rate| (rate - current).abs() < RATE_TOLERANCE)
 }
 
-/// The rate the rate control selects next: the one after `current` in `rates`, wrapping around, or the first if
-/// `current` is not in the list. `None` with no rates.
-pub fn next_rate(rates: &[f64], current: f64) -> Option<f64> {
-    let first = *rates.first()?;
-    let next = rate_index(rates, current).map_or(first, |i| rates[(i + 1) % rates.len()]);
-    Some(next)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,14 +136,10 @@ mod tests {
     }
 
     #[test]
-    fn rate_cycling() {
-        assert_eq!(next_rate(&[0.5, 1.0, 1.5, 2.0], 2.0), Some(0.5));
-        assert_eq!(next_rate(&[0.5, 1.0, 1.5, 2.0], 1.0), Some(1.5));
-        assert_eq!(next_rate(&[0.5, 1.0, 2.0], 1.25), Some(0.5));
-        assert_eq!(next_rate(&[1.0, 1.5, 2.0], 1.0), Some(1.5));
-        assert_eq!(next_rate(&[], 1.0), None);
+    fn rate_indices() {
+        assert_eq!(rate_index(&[0.5, 1.0, 1.5, 2.0], 2.0), Some(3));
+        assert_eq!(rate_index(&[], 1.0), None);
         // A rate mpv reports back with a tiny floating-point difference still matches its entry.
-        assert_eq!(next_rate(&[0.5, 1.1, 2.0], 1.1 + 1e-9), Some(2.0));
         assert_eq!(rate_index(&[0.5, 1.1, 2.0], 1.1 + 1e-9), Some(1));
         assert_eq!(rate_index(&[0.5, 2.0], 1.0), None);
     }

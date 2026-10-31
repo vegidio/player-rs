@@ -30,6 +30,11 @@ log = "0.4"
 [target.'cfg(any(target_os = "macos", windows, target_os = "linux"))'.dependencies]
 flume = "0.12"
 
+# Inter's registration, checked on the platform's own text system, which macOS creates only on the main thread.
+[[test]]
+name = "fonts"
+harness = false
+
 [dev-dependencies]
 # Headless windows for the element's tests.
 gpui-kit = { version = "0.8.1", default-features = false, features = ["component", "assets", "test-support"] }

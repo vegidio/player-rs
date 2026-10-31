@@ -238,18 +238,31 @@ impl Harness {
         self.draw(cx);
     }
 
-    fn find(&self, cx: &mut TestAppContext, id: &'static str) -> Option<Bounds<Pixels>> {
+    fn find(&self, cx: &mut TestAppContext, id: impl Into<ElementId>) -> Option<Bounds<Pixels>> {
+        let id = id.into();
         self.update(cx, |window, cx| {
             window.render_frame(cx);
             window.try_find(id).filter(|element| element.visible()).map(|element| element.bounds())
         })
     }
 
-    fn bounds(&self, cx: &mut TestAppContext, id: &'static str) -> Bounds<Pixels> {
-        self.find(cx, id).unwrap_or_else(|| panic!("{id} is not drawn"))
+    /// The accessible label and description of the drawn element `id`.
+    fn described(&self, cx: &mut TestAppContext, id: impl Into<ElementId>) -> (Option<String>, Option<String>) {
+        let id = id.into();
+        self.update(cx, |window, cx| {
+            window.render_frame(cx);
+            let element = window.find(id);
+            (element.label().map(str::to_owned), element.description().map(str::to_owned))
+        })
     }
 
-    fn click(&self, cx: &mut TestAppContext, id: &'static str) {
+    fn bounds(&self, cx: &mut TestAppContext, id: impl Into<ElementId>) -> Bounds<Pixels> {
+        let id = id.into();
+        self.find(cx, id.clone()).unwrap_or_else(|| panic!("{id:?} is not drawn"))
+    }
+
+    fn click(&self, cx: &mut TestAppContext, id: impl Into<ElementId>) {
+        let id = id.into();
         self.update(cx, |window, cx| window.click(id, cx));
         self.draw(cx);
     }
@@ -268,7 +281,7 @@ impl Harness {
     }
 
     /// Moves the pointer to the centre of `id`.
-    fn hover(&self, cx: &mut TestAppContext, id: &'static str) {
+    fn hover(&self, cx: &mut TestAppContext, id: impl Into<ElementId>) {
         let center = self.bounds(cx, id).center();
         self.mouse_move(cx, center, None);
     }
@@ -341,9 +354,24 @@ fn along(bounds: Bounds<Pixels>, margin: f32, fraction: f32) -> Point<Pixels> {
     point(start + width * fraction, bounds.center().y)
 }
 
-/// The seek bar's point at `fraction`: its track has 10-pixel margins.
+/// The seek bar's point at `fraction`: its track spans the bar.
 fn seek_at(bounds: Bounds<Pixels>, fraction: f32) -> Point<Pixels> {
-    along(bounds, 10., fraction)
+    along(bounds, 0., fraction)
+}
+
+/// The vertical volume bar's point at `fraction` of its height, from the bottom, at its horizontal centre.
+fn volume_at(bounds: Bounds<Pixels>, fraction: f32) -> Point<Pixels> {
+    point(bounds.center().x, bounds.bottom() - bounds.size.height * fraction)
+}
+
+/// The Settings menu's entry at `index` on the page shown.
+fn menu_item(index: usize) -> ElementId {
+    ("menu-item", index).into()
+}
+
+/// The open Settings menu, as last drawn.
+fn shown_menu(harness: &Harness, cx: &TestAppContext) -> ui::SettingsMenu {
+    harness.drawn(cx).settings.menu.expect("the menu is open")
 }
 
 fn secs(position: Option<Duration>) -> f64 {
@@ -400,18 +428,18 @@ fn options_are_read_once_per_player(cx: &mut TestAppContext) {
 #[gpui_kit::test]
 fn skin_is_read_once_per_player(cx: &mut TestAppContext) {
     let harness = Harness::open(cx, Setup { autoplay: Autoplay::Off, ..Setup::default() });
-    assert!(harness.find(cx, "big-play").is_some());
+    assert!(harness.find(cx, "control-bar").is_some());
 
     // The same player under the same id keeps the first skin.
     harness.change_parent(cx, |parent| parent.skin = Skin::None);
-    assert!(harness.find(cx, "big-play").is_some());
+    assert!(harness.find(cx, "control-bar").is_some());
 
     // A different player takes the skin given then.
     let other = player(Autoplay::Off, 1.0);
     harness.change_parent(cx, |parent| parent.player = other.clone());
     let view = harness.view();
     assert!(cx.read(|cx| Player::ptr_eq(view.read(cx).player(), &other)));
-    assert!(harness.find(cx, "big-play").is_none());
+    assert!(harness.find(cx, "control-bar").is_none());
 }
 
 // 1.4: fluid sizing.
@@ -452,16 +480,6 @@ fn play_control_pauses_plays_and_replays(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn rate_control_cycles(cx: &mut TestAppContext) {
-    let setup = Setup { options: options().playback_rates([1.0, 1.5, 2.0]).build().unwrap(), ..Setup::default() };
-    let harness = Harness::open(cx, setup);
-    harness.wait_playing(cx);
-    assert_eq!(harness.drawn(cx).rate.as_deref(), Some("1x"));
-    harness.click(cx, "rate");
-    harness.wait(cx, "rate 1.5", |state, view| state.rate == 1.5 && view.rate.as_deref() == Some("1.5x"));
-}
-
-#[gpui_kit::test]
 fn mute_control_toggles(cx: &mut TestAppContext) {
     let harness = Harness::open(cx, Setup { volume: 0.8, ..Setup::default() });
     harness.wait_playing(cx);
@@ -472,12 +490,62 @@ fn mute_control_toggles(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn no_rate_control_without_rates(cx: &mut TestAppContext) {
+fn bar_while_paused(cx: &mut TestAppContext) {
+    let harness = Harness::open(cx, Setup { volume: 0.5, media: Media::Wav(120), ..Setup::default() });
+    harness.wait_playing(cx);
+    harness.player.pause().unwrap();
+    harness.player.seek(player::Seek::To(Duration::from_millis(42_500))).unwrap();
+    harness.wait(cx, "0:42", |state, view| state.paused && view.current_time == "0:42");
+    let view = harness.drawn(cx);
+    assert_eq!((view.play_icon, view.volume_level), (PlayIcon::Play, 2));
+    assert_eq!((view.current_time.as_str(), view.time_label.as_str()), ("0:42", "-1:18"));
+    assert!((view.played - 42.5 / 120.).abs() < 0.01, "a little over a third played: {}", view.played);
+
+    // In order, left to right, inside the pill.
+    let ids = ["play", "mute", "current-time", "seek-bar", "time-display", "settings", "fullscreen"];
+    let bounds: Vec<_> = ids.iter().map(|id| harness.bounds(cx, *id)).collect();
+    for (pair, ids) in bounds.windows(2).zip(ids.windows(2)) {
+        assert!(pair[0].right() <= pair[1].left(), "{} before {}", ids[0], ids[1]);
+    }
+    let pill = harness.bounds(cx, "control-bar");
+    assert!(bounds.iter().all(|b| pill.contains(&b.center())), "every control is in the pill");
+}
+
+#[gpui_kit::test]
+fn rate_is_chosen_in_the_settings_menu(cx: &mut TestAppContext) {
+    let setup = Setup { options: options().playback_rates([1.0, 1.5, 2.0]).build().unwrap(), ..Setup::default() };
+    let harness = Harness::open(cx, setup);
+    harness.wait_playing(cx);
+    assert!(harness.find(cx, "rate").is_none(), "no rate control of its own");
+    assert!(harness.find(cx, "settings").is_some());
+}
+
+#[gpui_kit::test]
+fn no_settings_without_rates(cx: &mut TestAppContext) {
     let setup = Setup { options: options().playback_rates([]).build().unwrap(), ..Setup::default() };
     let harness = Harness::open(cx, setup);
     harness.wait_playing(cx);
     assert!(harness.find(cx, "play").is_some() && harness.find(cx, "time-display").is_some());
-    assert!(harness.find(cx, "rate").is_none());
+    assert!(harness.find(cx, "settings").is_none());
+}
+
+#[gpui_kit::test]
+fn fixed_size(cx: &mut TestAppContext) {
+    let harness = Harness::open(cx, Setup { sizing: Sizing::Fixed(640., 360.), ..Setup::default() });
+    harness.wait_playing(cx);
+    let ids = ["control-bar", "play", "mute", "current-time", "time-display", "settings", "fullscreen"];
+    let small: Vec<_> = ids.iter().map(|id| harness.bounds(cx, *id).size).collect();
+    let small_seek = harness.bounds(cx, "seek-bar").size;
+    assert_eq!(small[0].height, px(43.5), "the pill is half the canvas's 87");
+    assert_eq!(small[1], size(px(24.), px(24.)), "and its buttons half its 48");
+
+    harness.change_parent(cx, |parent| parent.sizing = Sizing::Fixed(1920., 1080.));
+    let large: Vec<_> = ids.iter().map(|id| harness.bounds(cx, *id).size).collect();
+    let large_seek = harness.bounds(cx, "seek-bar").size;
+    assert_eq!(large[0].height, small[0].height);
+    assert_eq!(&large[1..], &small[1..], "the controls and labels keep their sizes");
+    assert_eq!(large_seek.height, small_seek.height);
+    assert_eq!(large_seek.width - small_seek.width, px(1920. - 640.), "only the seek bar widens");
 }
 
 #[gpui_kit::test]
@@ -488,12 +556,13 @@ fn hidden_parts(cx: &mut TestAppContext) {
     for id in ["mute", "volume-panel", "volume-bar", "fullscreen"] {
         assert!(harness.find(cx, id).is_none(), "{id}");
     }
-    // The seek bar takes the freed width: it runs from the play control to the time display, and the rate control
-    // ends the bar.
+    // The seek bar takes the freed width: between the current time and the time display, and Settings ends the bar.
+    let gap = px(12.);
     let seek = harness.bounds(cx, "seek-bar");
-    assert_eq!(seek.left(), harness.bounds(cx, "play").right());
-    assert_eq!(seek.right(), harness.bounds(cx, "time-display").left());
-    assert_eq!(harness.bounds(cx, "rate").right(), harness.bounds(cx, "control-bar").right());
+    assert_eq!(seek.left(), harness.bounds(cx, "current-time").right() + gap);
+    assert_eq!(seek.right(), harness.bounds(cx, "time-display").left() - gap);
+    assert_eq!(harness.bounds(cx, "settings").right(), harness.bounds(cx, "control-bar").right() - px(8.5));
+    assert_eq!(harness.bounds(cx, "play").left(), harness.bounds(cx, "control-bar").left() + px(9.));
 }
 
 #[gpui_kit::test]
@@ -566,8 +635,11 @@ fn seek_hover_shows_the_time(cx: &mut TestAppContext) {
     harness.mouse_move(cx, seek_at(bar, 0.5), None);
     assert_eq!(harness.drawn(cx).hover.map(|hover| hover.label).as_deref(), Some("0:45"));
     let label = harness.bounds(cx, "seek-label");
-    // Video.js places it 3.4em above the track, which is centred in the 30-pixel bar.
-    assert!(label.bottom() < bar.center().y - px(5.), "the label is above the track");
+    // 4 pixels above the hovered 5-pixel track, which is centred in the bar.
+    assert!(
+        (label.bottom() - (bar.center().y - px(2.5) - px(4.))).abs() < px(0.6),
+        "the label is above the track"
+    );
     assert!((label.center().x - seek_at(bar, 0.5).x).abs() < px(1.5), "and centred on the pointer");
 }
 
@@ -584,13 +656,13 @@ fn seek_knob_marks_the_played_end(cx: &mut TestAppContext) {
     harness.wait(cx, "the seek to 50 %", |state, _| (secs(state.position) - 45.).abs() < 0.3);
     harness.draw(cx);
     let knob = harness.bounds(cx, "seek-knob");
-    assert_eq!(knob.size.width, px(9.));
+    assert_eq!(knob.size.width, px(7.));
     assert!((knob.center().x - seek_at(bar, 0.5).x).abs() < px(1.5), "the knob is centred on the played end");
     assert!((knob.center().y - bar.center().y).abs() < px(1.), "and on the track");
 
     harness.mouse_move(cx, seek_at(bar, 0.2), None);
     harness.draw(cx);
-    assert_eq!(harness.bounds(cx, "seek-knob").size.width, px(15.), "it grows with the hovered track");
+    assert_eq!(harness.bounds(cx, "seek-knob").size.width, px(10.), "it grows with the hovered track");
 }
 
 #[gpui_kit::test]
@@ -614,14 +686,24 @@ fn seek_bar_ignores_the_pointer_with_unknown_duration(cx: &mut TestAppContext) {
 // 2.3: the volume panel.
 
 #[gpui_kit::test]
-fn volume_bar_expands_on_hover(cx: &mut TestAppContext) {
+fn volume_popover_opens_on_hover(cx: &mut TestAppContext) {
     let harness = Harness::open(cx, Setup::default());
     harness.wait_playing(cx);
-    assert!(harness.find(cx, "volume-bar").is_none(), "collapsed");
+    assert!(harness.find(cx, "volume-popover").is_none(), "closed");
     harness.hover(cx, "mute");
-    assert_eq!(harness.bounds(cx, "volume-bar").size.width, px(50.));
+    let popover = harness.bounds(cx, "volume-popover");
+    let mute = harness.bounds(cx, "mute");
+    assert!((popover.center().x - mute.center().x).abs() < px(0.6), "centred above the mute control");
+    assert!((popover.bottom() - mute.top()).abs() < px(1.), "its hover region reaches down to it");
+    let bar = harness.bounds(cx, "volume-bar");
+    assert!(bar.bottom() < harness.bounds(cx, "control-bar").top(), "the bar is above the pill");
+
+    // Across the gap and onto the popover, it stays open; it closes once the pointer leaves both.
+    harness.mouse_move(cx, point(mute.center().x, mute.top() - px(4.)), None);
+    harness.hover(cx, "volume-bar");
+    assert!(harness.find(cx, "volume-popover").is_some(), "open over the popover");
     harness.hover(cx, "seek-bar");
-    assert!(harness.find(cx, "volume-bar").is_none(), "collapsed after leaving the panel");
+    assert!(harness.find(cx, "volume-popover").is_none(), "closed after leaving both");
 }
 
 #[gpui_kit::test]
@@ -632,9 +714,9 @@ fn volume_drag_sets_the_volume_and_unmutes(cx: &mut TestAppContext) {
     harness.wait_view(cx, "mute", |view| view.muted);
     harness.hover(cx, "mute");
     let bar = harness.bounds(cx, "volume-bar");
-    harness.mouse_move(cx, along(bar, 4.5, 0.4), None);
-    harness.mouse_down(cx, along(bar, 4.5, 0.4));
-    harness.mouse_up(cx, along(bar, 4.5, 0.4));
+    harness.mouse_move(cx, volume_at(bar, 0.4), None);
+    harness.mouse_down(cx, volume_at(bar, 0.4));
+    harness.mouse_up(cx, volume_at(bar, 0.4));
     harness.wait(cx, "volume 0.4", |state, view| {
         !state.muted && (state.volume - 0.4).abs() < 0.01 && view.volume_level == 2
     });
@@ -647,11 +729,13 @@ fn volume_drag_continues_outside_the_bar(cx: &mut TestAppContext) {
     harness.wait_playing(cx);
     harness.hover(cx, "mute");
     let bar = harness.bounds(cx, "volume-bar");
-    harness.mouse_down(cx, along(bar, 4.5, 0.2));
+    harness.mouse_down(cx, volume_at(bar, 0.2));
     harness.wait(cx, "volume 0.2", |state, _| (state.volume - 0.2).abs() < 0.01);
-    harness.mouse_move(cx, point(bar.right() + px(200.), bar.top() - px(50.)), Some(MouseButton::Left));
+    let away = point(bar.right() + px(200.), bar.top() - px(50.));
+    harness.mouse_move(cx, away, Some(MouseButton::Left));
     harness.wait(cx, "volume 1", |state, _| state.volume == 1.0);
-    harness.mouse_up(cx, point(bar.right() + px(200.), bar.top() - px(50.)));
+    assert!(harness.find(cx, "volume-popover").is_some(), "the drag keeps the popover open");
+    harness.mouse_up(cx, away);
 }
 
 // 2.4: pointer activity, clicks and fading.
@@ -726,29 +810,85 @@ fn bar_stays_visible_while_paused(cx: &mut TestAppContext) {
 // 2.5: overlays.
 
 #[gpui_kit::test]
-fn big_play_button_is_centred_and_plays(cx: &mut TestAppContext) {
+fn shown_before_the_first_play_with_no_big_play_button(cx: &mut TestAppContext) {
     let harness = Harness::open(cx, Setup { autoplay: Autoplay::Off, ..Setup::default() });
     let view = harness.drawn(cx);
-    assert!(view.big_play_button && !view.control_bar_visible);
-    let button = harness.bounds(cx, "big-play");
-    assert_eq!(button.size, size(px(90.), px(49.)));
-    assert_eq!(button.center(), harness.bounds(cx, "controls").center());
-    assert!(harness.find(cx, "control-bar").is_none(), "no bar before playback starts");
-
-    harness.click(cx, "big-play");
-    harness.wait_playing(cx);
-    harness.wait_view(cx, "the button to hide", |view| !view.big_play_button);
-    assert!(harness.find(cx, "big-play").is_none());
+    assert!(view.control_bar_visible && view.play_icon == PlayIcon::Play);
     assert!(harness.find(cx, "control-bar").is_some());
+    assert!(harness.find(cx, "big-play").is_none(), "the design has no big play button");
+
+    harness.click(cx, "controls");
+    harness.wait_playing(cx);
+    harness.player.pause().unwrap();
+    harness.wait_paused(cx);
+    harness.click(cx, "play");
+    harness.wait_playing(cx);
 }
 
 #[gpui_kit::test]
-fn error_display(cx: &mut TestAppContext) {
+fn error_card_over_the_disabled_bar(cx: &mut TestAppContext) {
+    let harness = Harness::open(cx, Setup { autoplay: Autoplay::Off, media: Media::Broken, ..Setup::default() });
+    let view = harness.drawn(cx);
+    let message = view.error.unwrap();
+    assert!(!message.is_empty() && !view.controls_enabled);
+    assert!(harness.find(cx, "error-title").is_some() && harness.find(cx, "error-message").is_some());
+    let (title, description) = harness.described(cx, "error");
+    assert_eq!(title.as_deref(), Some("This video can't be played"), "the design's title");
+    assert_eq!(description.as_deref(), Some(message.as_str()), "and mpv's message");
+    let card = harness.bounds(cx, "error");
+    assert_eq!(card.size.width, px(260.));
+    assert_eq!(card.center().x, harness.bounds(cx, "controls").center().x);
+    assert!(harness.find(cx, "control-bar").is_some(), "the bar stays, disabled");
+
+    // Disabled: the play control does nothing, and it is not a click on the video.
+    harness.click(cx, "play");
+    harness.click(cx, "time-display");
+    harness.draw(cx);
+    assert!(harness.player.state().paused);
+    assert_eq!(harness.drawn(cx).time_display, ui::TimeDisplay::Remaining);
+    // Fullscreen still works.
+    harness.click(cx, "fullscreen");
+    assert!(harness.window_fullscreen(cx));
+}
+
+#[gpui_kit::test]
+fn error_display_hidden(cx: &mut TestAppContext) {
+    let parts = ui::Parts::default().error_display(false);
+    let setup = Setup { options: options().parts(parts).build().unwrap(), media: Media::Broken, ..Setup::default() };
+    let harness = Harness::open(cx, setup);
+    assert!(harness.drawn(cx).error.is_some());
+    assert!(harness.find(cx, "error").is_none());
+    assert!(harness.find(cx, "control-bar").is_some(), "the bar is shown, disabled");
+    assert!(!harness.drawn(cx).controls_enabled);
+}
+
+#[gpui_kit::test]
+fn try_again_after_the_source_becomes_readable(cx: &mut TestAppContext) {
+    let harness = Harness::open(cx, Setup { autoplay: Autoplay::Off, media: Media::None, ..Setup::default() });
+    // A file mpv cannot read, which is then made readable.
+    let path = harness._dir.path().join("late.wav");
+    std::fs::write(&path, b"not a wav file").unwrap();
+    harness.player.load(Source::file(&path).unwrap()).unwrap();
+    harness.wait_view(cx, "the error", |view| view.error.is_some());
+    assert!(harness.find(cx, "try-again").is_some());
+
+    std::fs::copy(write_wav(&harness._dir, 5), &path).unwrap();
+    harness.click(cx, "try-again");
+    harness.wait_playing(cx);
+    harness.wait_view(cx, "the card to go", |view| view.error.is_none());
+    assert!(harness.find(cx, "error").is_none());
+}
+
+#[gpui_kit::test]
+fn try_again_from_the_keyboard(cx: &mut TestAppContext) {
     let harness = Harness::open(cx, Setup { media: Media::Broken, ..Setup::default() });
-    let message = harness.drawn(cx).error.unwrap();
-    assert!(!message.is_empty());
-    assert_eq!(harness.bounds(cx, "error").size, size(px(640.), px(360.)));
-    assert!(harness.find(cx, "control-bar").is_none() && harness.find(cx, "big-play").is_none());
+    harness.click(cx, "try-again");
+    harness.draw(cx);
+    // The broken source fails again, and the button keeps focus for another try.
+    harness.wait_view(cx, "the error again", |view| view.error.is_some());
+    harness.press(cx, "enter");
+    harness.wait_view(cx, "the error again", |view| view.error.is_some());
+    assert!(harness.keys(cx).is_empty(), "Enter activates the focused button");
 }
 
 #[gpui_kit::test]
@@ -765,16 +905,185 @@ fn spinner_is_centred(cx: &mut TestAppContext) {
     cx.executor().advance_clock(ui::SPINNER_DELAY);
     harness.draw(cx);
     if harness.drawn(cx).spinner {
-        assert_eq!(harness.bounds(cx, "spinner").center(), harness.bounds(cx, "controls").center());
+        let spinner = harness.bounds(cx, "spinner");
+        assert_eq!(spinner.center(), harness.bounds(cx, "controls").center());
+        assert_eq!(spinner.size, size(px(56.), px(56.)));
     } else {
         // The real `Seeked` already arrived; the spinner is then correctly gone.
         assert!(harness.find(cx, "spinner").is_none());
     }
 }
 
+#[gpui_kit::test]
+fn spinner_hidden(cx: &mut TestAppContext) {
+    let parts = ui::Parts::default().spinner(false);
+    let setup = Setup { options: options().parts(parts).build().unwrap(), media: Media::Wav(10), ..Setup::default() };
+    let harness = Harness::open(cx, setup);
+    harness.wait_playing(cx);
+    harness.view().update(cx, |view, cx| {
+        let now = view.now();
+        view.controls.handle_event(&Event::Seeking, now);
+        view.refresh(cx);
+    });
+    cx.executor().advance_clock(ui::SPINNER_DELAY);
+    harness.draw(cx);
+    assert!(harness.find(cx, "spinner").is_none());
+}
+
+// The Settings menu.
+
+#[gpui_kit::test]
+fn open_the_menu(cx: &mut TestAppContext) {
+    let harness = Harness::open(cx, Setup::default());
+    harness.wait_playing(cx);
+    assert!(harness.find(cx, "open-highlight").is_none());
+    harness.click(cx, "settings");
+    let menu = shown_menu(&harness, cx);
+    assert_eq!(menu.page, ui::Page::Root);
+    assert_eq!(menu.items.len(), 1);
+    assert_eq!((menu.items[0].label.as_str(), menu.items[0].value.as_deref()), ("Speed", Some("1x")));
+    assert!(harness.find(cx, menu_item(0)).is_some());
+    assert!(harness.find(cx, "open-highlight").is_some(), "the Settings button is highlighted");
+
+    // Above the pill, at its right end over the Settings button.
+    let popover = harness.bounds(cx, "settings-menu");
+    let settings = harness.bounds(cx, "settings");
+    assert!(popover.bottom() < harness.bounds(cx, "control-bar").top());
+    assert!(popover.left() < settings.center().x && settings.center().x < popover.right());
+    assert!(!harness.player.state().paused, "not a click on the video");
+
+    harness.click(cx, "settings");
+    assert_eq!(harness.drawn(cx).settings.menu, None, "the button closes it");
+}
+
+#[gpui_kit::test]
+fn pick_a_speed(cx: &mut TestAppContext) {
+    // Few enough rates for the list not to scroll, so every row can be clicked.
+    let setup = Setup { options: options().playback_rates([0.5, 1.0, 1.5, 2.0]).build().unwrap(), ..Setup::default() };
+    let harness = Harness::open(cx, setup);
+    harness.wait_playing(cx);
+    harness.click(cx, "settings");
+    harness.click(cx, menu_item(0));
+    let menu = shown_menu(&harness, cx);
+    assert_eq!(menu.page, ui::Page::Speed);
+    let labels: Vec<_> = menu.items.iter().map(|item| item.label.as_str()).collect();
+    assert_eq!(labels, ["0.5x", "1x", "1.5x", "2x"], "every configured rate");
+    let one = labels.iter().position(|label| *label == "1x").unwrap();
+    assert!(menu.items[one].checked);
+    assert!(harness.find(cx, "menu-back").is_some());
+
+    let index = labels.iter().position(|label| *label == "1.5x").unwrap();
+    harness.click(cx, menu_item(index));
+    harness.wait(cx, "rate 1.5", |state, view| {
+        state.rate == 1.5 && view.settings.menu.as_ref().is_some_and(|menu| menu.page == ui::Page::Root)
+    });
+    assert_eq!(shown_menu(&harness, cx).items[0].value.as_deref(), Some("1.5x"));
+    assert!(!harness.player.state().paused);
+}
+
+#[gpui_kit::test]
+fn back_to_the_root_page(cx: &mut TestAppContext) {
+    let harness = Harness::open(cx, Setup::default());
+    harness.wait_playing(cx);
+    harness.click(cx, "settings");
+    harness.click(cx, menu_item(0));
+    assert_eq!(shown_menu(&harness, cx).page, ui::Page::Speed);
+    harness.click(cx, "menu-back");
+    assert_eq!(shown_menu(&harness, cx).page, ui::Page::Root);
+}
+
+#[gpui_kit::test]
+fn click_outside_closes_the_menu(cx: &mut TestAppContext) {
+    let harness = Harness::open(cx, Setup::default());
+    harness.wait_playing(cx);
+    harness.player.pause().unwrap();
+    harness.wait_paused(cx);
+    harness.click(cx, "settings");
+    assert!(harness.drawn(cx).settings.menu.is_some());
+    harness.mouse_move(cx, point(px(100.), px(100.)), None);
+    harness.mouse_down(cx, point(px(100.), px(100.)));
+    harness.mouse_up(cx, point(px(100.), px(100.)));
+    assert_eq!(harness.drawn(cx).settings.menu, None);
+    harness.wait_playing(cx);
+}
+
+#[gpui_kit::test]
+fn long_list_scrolls(cx: &mut TestAppContext) {
+    let harness = Harness::open(cx, Setup::default());
+    harness.wait_playing(cx);
+    harness.focus(cx, |view| view.settings_focus.clone());
+    harness.press(cx, "enter");
+    harness.press(cx, "enter");
+    assert_eq!(shown_menu(&harness, cx).page, ui::Page::Speed);
+    let popover = harness.bounds(cx, "settings-menu");
+    assert_eq!(popover.size.height, px(223.), "the page's fixed height");
+    harness.draw(cx);
+    assert!(harness.find(cx, "menu-scrollbar").is_some(), "twelve rates overflow it, with a scrollbar");
+
+    let list = harness.bounds(cx, "menu-list");
+    assert!(harness.find(cx, menu_item(11)).is_none(), "3x starts out of view");
+    let thumb = harness.bounds(cx, "menu-scrollbar");
+    assert_eq!(thumb.size.width, px(3.));
+    while !shown_menu(&harness, cx).items[11].focused {
+        harness.press(cx, "down");
+    }
+    harness.draw(cx);
+    let last = harness.bounds(cx, menu_item(11));
+    assert!(last.top() >= list.top() && last.bottom() <= list.bottom() + px(0.5), "3x is scrolled into view");
+    assert!(harness.bounds(cx, "menu-scrollbar").top() > thumb.top(), "and the scrollbar follows");
+}
+
+#[gpui_kit::test]
+fn menu_from_the_keyboard(cx: &mut TestAppContext) {
+    let harness = Harness::open(cx, Setup::default());
+    harness.wait_playing(cx);
+    harness.focus(cx, |view| view.settings_focus.clone());
+    harness.press(cx, "enter");
+    assert!(harness.focused(cx, |view| view.menu_focus.clone()), "focus moves into the menu");
+    for key in ["enter", "down", "enter"] {
+        harness.press(cx, key);
+    }
+    harness.wait(cx, "the rate after 1", |state, _| state.rate == 1.25);
+    let menu = shown_menu(&harness, cx);
+    assert_eq!(menu.page, ui::Page::Root);
+    assert!(harness.focused(cx, |view| view.menu_focus.clone()), "focus stays in the menu");
+    assert!(!harness.player.state().paused, "the keys do not toggle play");
+    assert!(harness.keys(cx).is_empty());
+}
+
+#[gpui_kit::test]
+fn escape_returns_focus_to_the_settings_button(cx: &mut TestAppContext) {
+    let harness = Harness::open(cx, Setup::default());
+    harness.wait_playing(cx);
+    harness.click(cx, "fullscreen");
+    assert!(harness.window_fullscreen(cx));
+    harness.focus(cx, |view| view.settings_focus.clone());
+    harness.press(cx, "space");
+    assert!(harness.focused(cx, |view| view.menu_focus.clone()));
+    harness.press(cx, "escape");
+    assert_eq!(harness.drawn(cx).settings.menu, None);
+    assert!(harness.focused(cx, |view| view.settings_focus.clone()));
+    assert!(harness.window_fullscreen(cx), "still fullscreen");
+    assert_eq!(harness.fullscreen(cx), Fullscreen::On);
+}
+
+#[gpui_kit::test]
+fn menu_focus_returns_to_the_player_when_the_button_goes(cx: &mut TestAppContext) {
+    let harness = Harness::open(cx, Setup::default());
+    harness.wait_playing(cx);
+    harness.focus(cx, |view| view.settings_focus.clone());
+    harness.press(cx, "enter");
+    assert!(harness.focused(cx, |view| view.menu_focus.clone()));
+    // An error disables the controls, which takes the menu and the Settings button's focus with them.
+    harness.load(cx, Media::Broken);
+    harness.draw(cx);
+    assert!(harness.find(cx, "settings-menu").is_none());
+    assert!(harness.focused(cx, |view| view.focus.clone()));
+}
+
 // The None skin.
 
-const DRAWN: [&str; 7] = ["big-play", "control-bar", "play", "seek-bar", "error", "spinner", "seek-label"];
+const DRAWN: [&str; 7] = ["control-bar", "play", "seek-bar", "error", "spinner", "seek-label", "settings-menu"];
 
 #[gpui_kit::test]
 fn none_skin_draws_nothing(cx: &mut TestAppContext) {
@@ -906,16 +1215,6 @@ fn play_and_fullscreen_actions(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn big_play_button_focuses_the_player(cx: &mut TestAppContext) {
-    let harness = Harness::open(cx, Setup { autoplay: Autoplay::Off, ..Setup::default() });
-    harness.click(cx, "big-play");
-    harness.wait_playing(cx);
-    assert!(harness.focused(cx, |view| view.focus.clone()));
-    harness.press(cx, "k");
-    harness.wait_paused(cx);
-}
-
-#[gpui_kit::test]
 fn clicking_the_bar_focuses_the_player(cx: &mut TestAppContext) {
     let harness = Harness::open(cx, Setup::default());
     harness.wait_playing(cx);
@@ -930,14 +1229,32 @@ fn tab_reaches_the_seek_bar(cx: &mut TestAppContext) {
     let harness = Harness::open(cx, Setup::default());
     harness.wait_playing(cx);
     harness.focus(cx, |view| view.focus.clone());
-    // Control-bar order: play, mute, the volume bar (collapsed, but focusable), then the seek bar.
+    // Control-bar order: play, mute, the volume bar (its popover closed, but focusable), then the seek bar.
     for _ in 0..3 {
         harness.press(cx, "tab");
     }
     assert!(harness.focused(cx, |view| view.volume_focus.clone()), "the volume bar is third");
-    assert!(harness.find(cx, "volume-bar").is_some(), "and expands while focused");
+    assert!(harness.find(cx, "volume-popover").is_some(), "and its popover opens while it is focused");
     harness.press(cx, "tab");
     assert!(harness.focused(cx, |view| view.seek_focus.clone()));
+    harness.press(cx, "tab");
+    assert!(
+        harness.focused(cx, |view| view.settings_focus.clone()),
+        "then Settings: the time labels take no focus"
+    );
+}
+
+#[gpui_kit::test]
+fn volume_keys_open_the_popover(cx: &mut TestAppContext) {
+    let harness = Harness::open(cx, Setup { volume: 0.5, ..Setup::default() });
+    harness.wait_playing(cx);
+    harness.focus(cx, |view| view.focus.clone());
+    for _ in 0..3 {
+        harness.press(cx, "tab");
+    }
+    harness.press(cx, "up");
+    assert!(harness.find(cx, "volume-popover").is_some());
+    harness.wait(cx, "volume 0.6", |state, _| (state.volume - 0.6).abs() < 0.01);
 }
 
 #[gpui_kit::test]

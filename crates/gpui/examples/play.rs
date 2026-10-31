@@ -5,7 +5,8 @@
 //! ```
 //!
 //! The optional second argument chooses the skin: `default`, the default, or `none` for bare video, which still takes
-//! clicks and hotkeys. The Default skin offers the default playback rates, and its time display switches between the
+//! clicks and hotkeys. The Default skin shows its pill bar from the start, with the volume popover over the mute
+//! button and the default playback rates on the Settings menu's Speed page; its time display switches between the
 //! remaining time and the duration when clicked. The controls' hotkeys work once the player is clicked: `k` or Space
 //! toggles pause, `m` mutes and `f` toggles fullscreen. Once a second it prints how often the window re-rendered (once
 //! per video frame while playing, plus the controls' own changes, and not at all while paused and idle) and the

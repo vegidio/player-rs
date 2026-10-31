@@ -72,17 +72,31 @@ pub(crate) struct ControlsView {
     focus: FocusHandle,
     seek_focus: FocusHandle,
     volume_focus: FocusHandle,
+    settings_focus: FocusHandle,
+    /// The open Settings menu's container; while it is focused, keys go to the menu.
+    menu_focus: FocusHandle,
+    /// The Settings menu's scrolling list, and the page and entry it was last scrolled to.
+    menu_scroll: ScrollHandle,
+    menu_scrolled: Option<(ui::Page, usize)>,
     fullscreen: Fullscreen,
     pub(crate) on_fullscreen_change: Option<FullscreenCallback>,
     fade: Fade,
     seek_hovered: bool,
-    volume_hovered: bool,
+    /// The pointer is over the mute control, or over the volume popover; either keeps the popover shown.
+    mute_hovered: bool,
+    volume_popover_hovered: bool,
     /// A pointer button went down over the player and is not released yet.
     pressed: bool,
     drag: Option<Drag>,
     /// The bars' bounds at the last prepaint, which pointer positions are measured against.
     seek_bounds: Rc<Cell<Bounds<Pixels>>>,
     volume_bounds: Rc<Cell<Bounds<Pixels>>>,
+    /// Bounds at the last prepaint that popovers are placed against, and that a press closing the menu is tested
+    /// against.
+    root_bounds: Rc<Cell<Bounds<Pixels>>>,
+    mute_bounds: Rc<Cell<Bounds<Pixels>>>,
+    settings_bounds: Rc<Cell<Bounds<Pixels>>>,
+    menu_bounds: Rc<Cell<Bounds<Pixels>>>,
     /// The deadline the deadline task waits for.
     armed: Option<Instant>,
     deadline: Option<Task<()>>,
@@ -93,14 +107,8 @@ pub(crate) struct ControlsView {
 impl Render for ControlsView {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.rearm(cx);
-        // A skin that draws nothing from the view is not re-rendered when it changes, and has no control to lose focus.
-        let drawn = !self.skin.draws_view() || self.bar_drawn() || self.view.big_play_button;
-        if !drawn && self.focus.contains_focused(window, cx) {
-            // A control that faded out away, or the big play button, had focus: keep the keys in the player.
-            if !self.focus.is_focused(window) {
-                window.focus(&self.focus, cx);
-            }
-        }
+        self.keep_focus(window, cx);
+        self.scroll_menu();
 
         let skin = self.skin.render(self, window, cx);
         div()
@@ -119,7 +127,9 @@ impl Render for ControlsView {
             )
             .on_mouse_move(cx.listener(|this, _: &MouseMoveEvent, _, cx| this.pointer_moved(cx)))
             .on_hover(cx.listener(|this, hovered: &bool, _, cx| this.pointer_hovered(*hovered, cx)))
-            .capture_any_mouse_down(cx.listener(|this, _: &MouseDownEvent, _, cx| this.pointer_pressed(cx)))
+            .capture_any_mouse_down(
+                cx.listener(|this, event: &MouseDownEvent, window, cx| this.pointer_pressed(event, window, cx)),
+            )
             .on_click(cx.listener(Self::video_clicked))
             .child(self.window_listeners(cx))
             .child(skin)
@@ -136,6 +146,7 @@ impl ControlsView {
     ) -> Self {
         // Subscribed before the controller reads the player's state, so no event between the two is missed.
         let events = player.subscribe();
+        crate::fonts::register(cx);
         let clock = cx.background_executor().clone();
         let now = clock.now();
         let skin = skins::renderer(skin);
@@ -167,15 +178,24 @@ impl ControlsView {
             focus: cx.focus_handle(),
             seek_focus: cx.focus_handle().tab_stop(true),
             volume_focus: cx.focus_handle().tab_stop(true),
+            settings_focus: cx.focus_handle().tab_stop(true),
+            menu_focus: cx.focus_handle(),
+            menu_scroll: ScrollHandle::new(),
+            menu_scrolled: None,
             fullscreen: Fullscreen::Off,
             on_fullscreen_change: None,
             fade: Fade::default(),
             seek_hovered: false,
-            volume_hovered: false,
+            mute_hovered: false,
+            volume_popover_hovered: false,
             pressed: false,
             drag: None,
             seek_bounds: Rc::default(),
             volume_bounds: Rc::default(),
+            root_bounds: Rc::default(),
+            mute_bounds: Rc::default(),
+            settings_bounds: Rc::default(),
+            menu_bounds: Rc::default(),
             armed: None,
             deadline: None,
             _events: events,
@@ -259,6 +279,52 @@ impl ControlsView {
         self.view.control_bar_visible || self.fade.out_until.is_some()
     }
 
+    /// Moves focus off controls that are gone, so keys keep reaching the player: to the Settings button when the
+    /// menu closed with focus in it, and to the player when the focused control faded out or was hidden.
+    fn keep_focus(&self, window: &mut Window, cx: &mut Context<Self>) {
+        // A skin that draws nothing from the view is not re-rendered when it changes, and has no control to lose focus.
+        if !self.skin.draws_view() {
+            return;
+        }
+        // Disabled controls take no focus, so a disabled Settings button and its menu count as gone.
+        let enabled = self.view.controls_enabled;
+        let settings_shown = self.bar_drawn() && self.view.settings.button && enabled;
+        let menu_shown = self.view.settings.menu.is_some() && enabled;
+        if !menu_shown && self.menu_focus.is_focused(window) {
+            let target = if settings_shown { &self.settings_focus } else { &self.focus };
+            window.focus(target, cx);
+        } else if !settings_shown && self.settings_focus.is_focused(window) {
+            window.focus(&self.focus, cx);
+        } else if !self.bar_drawn() && self.focus.contains_focused(window, cx) && !self.focus.is_focused(window) {
+            // A control that faded out away had focus.
+            let error_card = self.view.error.is_some() && self.view.shown.error_display;
+            if !error_card {
+                window.focus(&self.focus, cx);
+            }
+        }
+    }
+
+    /// Keeps the Settings menu's focused entry in view, once per change of page or focus.
+    fn scroll_menu(&mut self) {
+        let wanted = self.view.settings.menu.as_ref().map(|menu| (menu.page, menu.focused));
+        if wanted != self.menu_scrolled {
+            if let Some((_, focused)) = wanted {
+                self.menu_scroll.scroll_to_item(focused);
+            }
+            self.menu_scrolled = wanted;
+        }
+    }
+
+    /// Whether the volume popover is shown: while the pointer is over the mute control or the popover, during a
+    /// volume drag, or while the volume bar has focus.
+    fn volume_open(&self, window: &Window) -> bool {
+        self.view.controls_enabled
+            && (self.mute_hovered
+                || self.volume_popover_hovered
+                || self.drag == Some(Drag::Volume)
+                || self.volume_focus.is_focused(window))
+    }
+
     /// Window-level pointer listeners, so a drag continues, and a press ends, wherever the pointer goes. They run in
     /// the capture phase, before anything in the window can stop the event.
     fn window_listeners(&self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -306,13 +372,20 @@ impl ControlsView {
 
     fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let keystroke = &event.keystroke;
-        if keystroke.key == "escape" && !keystroke.modifiers.modified() && self.fullscreen != Fullscreen::Off {
+        let in_menu = self.menu_focus.is_focused(window);
+        if keystroke.key == "escape"
+            && !keystroke.modifiers.modified()
+            && self.fullscreen != Fullscreen::Off
+            && !in_menu
+        {
             cx.stop_propagation();
             self.toggle_fullscreen(window, cx);
             return;
         }
         let Some((key, modifiers)) = keys::translate(keystroke) else { return };
-        let focus = if self.seek_focus.is_focused(window) {
+        let focus = if in_menu {
+            Focus::Menu
+        } else if self.seek_focus.is_focused(window) {
             Focus::SeekBar
         } else if self.volume_focus.is_focused(window) {
             Focus::VolumeBar
@@ -350,10 +423,25 @@ impl ControlsView {
         self.refresh(cx);
     }
 
-    fn pointer_pressed(&mut self, cx: &mut Context<Self>) {
+    /// A press anywhere over the player, before any control sees it. One outside the open Settings menu and its
+    /// button closes the menu, and goes on to whatever is under it, as Video.js's menu closes on blur.
+    fn pointer_pressed(&mut self, event: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.pressed = true;
-        self.controls.pointer_pressed(self.now());
+        let now = self.now();
+        self.controls.pointer_pressed(now);
+        let on_menu = [&self.menu_bounds, &self.settings_bounds].iter().any(|b| b.get().contains(&event.position));
+        if self.view.settings.menu.is_some() && !on_menu {
+            self.perform(Action::CloseSettings, window, cx);
+        }
         self.refresh(cx);
+    }
+
+    /// The Settings button was activated. From the keyboard, focus moves into the menu it opens.
+    fn settings_activated(&mut self, keyboard: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.perform(Action::ToggleSettings, window, cx);
+        if keyboard && self.view.settings.menu.is_some() {
+            window.focus(&self.menu_focus, cx);
+        }
     }
 
     fn bar_hovered(&mut self, hovered: bool, cx: &mut Context<Self>) {
@@ -376,17 +464,20 @@ impl ControlsView {
         self.refresh(cx);
     }
 
-    fn fraction(x: Pixels, bounds: Bounds<Pixels>) -> f64 {
-        let (x, left, width) = (f32::from(x), f32::from(bounds.left()), f32::from(bounds.size.width));
-        ui::bars::fraction(f64::from(x), f64::from(left), f64::from(width))
+    fn fraction(at: Pixels, start: Pixels, length: Pixels) -> f64 {
+        ui::bars::fraction(f64::from(f32::from(at)), f64::from(f32::from(start)), f64::from(f32::from(length)))
     }
 
+    /// The seek bar's fraction at `x`, from its left.
     fn seek_fraction(&self, x: Pixels) -> f64 {
-        Self::fraction(x, self.seek_bounds.get())
+        let bounds = self.seek_bounds.get();
+        Self::fraction(x, bounds.left(), bounds.size.width)
     }
 
-    fn volume_fraction(&self, x: Pixels) -> f64 {
-        Self::fraction(x, self.volume_bounds.get())
+    /// The vertical volume bar's fraction at `y`, from its bottom.
+    fn volume_fraction(&self, y: Pixels) -> f64 {
+        let bounds = self.volume_bounds.get();
+        1. - Self::fraction(y, bounds.top(), bounds.size.height)
     }
 
     fn seek_pressed(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
@@ -410,13 +501,18 @@ impl ControlsView {
 
     fn volume_pressed(&mut self, position: Point<Pixels>, cx: &mut Context<Self>) {
         self.drag = Some(Drag::Volume);
-        let fraction = self.volume_fraction(position.x);
+        let fraction = self.volume_fraction(position.y);
         Self::check(self.controls.volume_drag(fraction, self.now()));
         self.refresh(cx);
     }
 
-    fn volume_panel_hovered(&mut self, hovered: bool, cx: &mut Context<Self>) {
-        self.volume_hovered = hovered;
+    fn mute_hovered(&mut self, hovered: bool, cx: &mut Context<Self>) {
+        self.mute_hovered = hovered;
+        cx.notify();
+    }
+
+    fn volume_popover_hovered(&mut self, hovered: bool, cx: &mut Context<Self>) {
+        self.volume_popover_hovered = hovered;
         cx.notify();
     }
 
@@ -429,7 +525,7 @@ impl ControlsView {
                 Self::check(self.controls.seek_drag(fraction, now));
             }
             Some(Drag::Volume) => {
-                let fraction = self.volume_fraction(event.position.x);
+                let fraction = self.volume_fraction(event.position.y);
                 Self::check(self.controls.volume_drag(fraction, now));
             }
             None => return,
@@ -450,7 +546,7 @@ impl ControlsView {
             self.controls.pointer_released(now);
         }
         if drag.is_some() {
-            // What is drawn depends on the drag: the volume bar is held expanded, and the seek fractions unrounded.
+            // What is drawn depends on the drag: the volume popover is held open, and the seek fractions unrounded.
             cx.notify();
         }
         if drag.is_some() || pressed {

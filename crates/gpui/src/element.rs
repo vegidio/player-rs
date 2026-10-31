@@ -35,8 +35,8 @@ pub struct VideoPlayer {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[non_exhaustive]
 pub enum Skin {
-    /// The player's own controls, with every part the [options](player::ui::Parts) show. Until its designed look
-    /// arrives, this is Video.js 8's default skin.
+    /// The player's own controls, with every part the [options](player::ui::Parts) show: a floating pill bar, a
+    /// volume popover, a Settings menu, a spinner and an error card, drawn in the embedded Inter typeface.
     #[default]
     Default,
     /// No controls, overlays, spinner, error display or poster: bare video, which the app may control itself.

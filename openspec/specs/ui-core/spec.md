@@ -108,13 +108,13 @@ The UI layer SHALL perform these actions on the player:
 - seek to a position, seek by an offset
 - toggle mute
 - set the volume, step the volume by an amount
-- set the rate, cycle the rate
+- set the rate
 - toggle fullscreen
 - retry after an error
 - toggle the time display
 - open, close and navigate the Settings menu
 
-Toggle mute SHALL follow Video.js: at volume 0, it SHALL set the volume to the last non-zero volume (at least 0.1) and unmute. Otherwise it SHALL flip the mute state. Stepping or setting the volume while muted SHALL unmute. Cycling the rate SHALL select the playback rate after the current one in the configured list, wrapping around, or the first one if the current rate is not in the list. With no rates configured, it SHALL do nothing. Toggling fullscreen SHALL not touch the player; it SHALL be returned to the frontend as a request, because only the frontend controls its window.
+Toggle mute SHALL follow Video.js: at volume 0, it SHALL set the volume to the last non-zero volume (at least 0.1) and unmute. Otherwise it SHALL flip the mute state. Stepping or setting the volume while muted SHALL unmute. Choosing among the configured playback rates SHALL happen on the Settings menu's Speed page; there SHALL be no action that cycles through them. Toggling fullscreen SHALL not touch the player; it SHALL be returned to the frontend as a request, because only the frontend controls its window.
 
 #### Scenario: Toggle mute at volume zero
 - **WHEN** the volume was 0.6, was then set to 0, and mute is toggled
@@ -124,12 +124,16 @@ Toggle mute SHALL follow Video.js: at volume 0, it SHALL set the volume to the l
 - **WHEN** the last non-zero volume was 0.05, the volume is 0, and mute is toggled
 - **THEN** the volume becomes 0.1
 
+#### Scenario: Set the rate
+- **WHEN** the rate is set to 1.5
+- **THEN** the player's rate becomes 1.5
+
 #### Scenario: Cycle the rate
-- **WHEN** the playback rates are `[0.5, 1, 1.5, 2]`, the rate is 2, and the rate is cycled
-- **THEN** the rate becomes 0.5
+- **WHEN** the playback rates are `[0.5, 1, 1.5, 2]` and the rate is 2
+- **THEN** no action moves to the next rate; 0.5 is chosen by selecting it on the Speed page, and the rate becomes 0.5
 
 #### Scenario: Cycle from a rate not in the list
-- **WHEN** the playback rates are `[0.5, 1, 2]`, the rate is 1.25, and the rate is cycled
+- **WHEN** the playback rates are `[0.5, 1, 2]`, the rate is 1.25, and `0.5x` is selected on the Speed page
 - **THEN** the rate becomes 0.5
 
 #### Scenario: Fullscreen is the frontend's
@@ -381,12 +385,16 @@ The playback rate SHALL be offered as the Speed item of the Settings menu, only 
 - **THEN** the Speed item is not offered
 
 #### Scenario: Label and cycle
-- **WHEN** the playback rates are `[1, 1.5, 2]`, the rate is 1 and the rate is cycled
-- **THEN** the rate becomes 1.5 and the Speed item's value reads `1.5x`
+- **WHEN** the playback rates are `[1, 1.5, 2]`, the rate is 1, and the rate is set to 1.5 without the menu
+- **THEN** the Speed item's value reads `1.5x` and `1.5x` is checked on its page
 
 #### Scenario: Label and selection
 - **WHEN** the playback rates are `[1, 1.5, 2]`, the rate is 1, and `1.5x` is selected on the Speed page
 - **THEN** the rate becomes 1.5, the Speed item's value reads `1.5x` and `1.5x` is checked
+
+#### Scenario: Rate set elsewhere
+- **WHEN** the playback rates are `[1, 1.5, 2]` and the rate is set to 1.25
+- **THEN** the Speed item's value reads `1.25x` and no entry on its page is checked
 
 ### Requirement: Part visibility and the Settings button
 

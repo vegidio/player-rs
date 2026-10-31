@@ -194,6 +194,8 @@ pub struct MenuItem {
     pub label: String,
     /// On the root page, the item's current value, such as `1.5x`.
     pub value: Option<String>,
+    /// On the root page, the page the item opens, such as [`Page::Speed`].
+    pub opens: Option<Page>,
     /// On an item's page, the entry is the current value.
     pub checked: bool,
     /// The entry has keyboard focus.
@@ -357,11 +359,6 @@ impl Controls {
             Action::SetVolume(volume) => self.set_volume(volume)?,
             Action::StepVolume(step) => self.set_volume(self.player.state().volume + step)?,
             Action::SetRate(rate) => player.set_rate(rate)?,
-            Action::CycleRate => {
-                if let Some(rate) = bars::next_rate(self.options.playback_rates(), player.state().rate) {
-                    player.set_rate(rate)?;
-                }
-            }
             Action::ToggleFullscreen => return Ok(Some(Request::ToggleFullscreen)),
             Action::Retry => {
                 if player.reload_last()? {
@@ -713,9 +710,10 @@ impl Controls {
     }
 
     fn menu_view(&self, menu: Menu, state: &State) -> SettingsMenu {
-        let entry = |index: usize, label: String, value: Option<String>, checked: bool| MenuItem {
+        let entry = |index: usize, label: String, value: Option<String>, opens: Option<Page>, checked: bool| MenuItem {
             label,
             value,
+            opens,
             checked,
             focused: index == menu.focused,
         };
@@ -725,7 +723,9 @@ impl Controls {
                 .into_iter()
                 .enumerate()
                 .map(|(index, item)| match item {
-                    Item::Speed => entry(index, "Speed".into(), Some(format_rate(state.rate)), false),
+                    Item::Speed => {
+                        entry(index, "Speed".into(), Some(format_rate(state.rate)), Some(Page::Speed), false)
+                    }
                 })
                 .collect(),
             Page::Speed => {
@@ -734,7 +734,7 @@ impl Controls {
                 rates
                     .iter()
                     .enumerate()
-                    .map(|(index, rate)| entry(index, format_rate(*rate), None, current == Some(index)))
+                    .map(|(index, rate)| entry(index, format_rate(*rate), None, None, current == Some(index)))
                     .collect()
             }
         };
@@ -902,7 +902,13 @@ mod tests {
         perform(&mut controls, Action::ToggleSettings);
         let root = menu(&controls).unwrap();
         assert_eq!((root.page, root.focused), (Page::Root, 0));
-        let speed = MenuItem { label: "Speed".into(), value: Some("1x".into()), checked: false, focused: true };
+        let speed = MenuItem {
+            label: "Speed".into(),
+            value: Some("1x".into()),
+            opens: Some(Page::Speed),
+            checked: false,
+            focused: true,
+        };
         assert_eq!(root.items, [speed]);
 
         // The Speed page opens focused on the current rate, which is checked.

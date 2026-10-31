@@ -347,40 +347,99 @@ fn volume_drag_unmutes() {
     assert_eq!(view.volume_level, 2);
 }
 
+/// A player with `options`, paused on loaded media, whose control bar (and so its menu) is shown before the first play.
+fn paused_with_bar(options: ui::Options) -> Harness {
+    let policy = BarPolicy { before_start: true, ..BarPolicy::default() };
+    let mut h = Harness::with_policy(Autoplay::Off, options, policy);
+    h.load_wav(30);
+    h
+}
+
+/// The Speed page's checked entries, opened from the root page.
+fn speed_page_checked(h: &mut Harness) -> Vec<bool> {
+    h.perform(Action::OpenPage(Page::Speed));
+    let menu = h.controls.view(Instant::now()).settings.menu.expect("the menu is open");
+    assert_eq!(menu.page, Page::Speed);
+    let checked = menu.items.iter().map(|item| item.checked).collect();
+    h.perform(Action::CloseSettings);
+    checked
+}
+
+/// The Speed item's value on the root page.
+fn speed_value(h: &mut Harness) -> Option<String> {
+    h.perform(Action::ToggleSettings);
+    let menu = h.controls.view(Instant::now()).settings.menu.expect("the menu is open");
+    h.perform(Action::CloseSettings);
+    menu.items[0].value.clone()
+}
+
 #[test]
-fn rate_cycling() {
-    let rates = ui::Options::builder().playback_rates([0.5, 1.0, 1.5, 2.0]).build().unwrap();
-    let mut h = Harness::new(Autoplay::Off, rates);
-    assert_eq!(h.controls.view(Instant::now()).rate.as_deref(), Some("1x"));
-
-    h.perform(Action::CycleRate);
+fn set_the_rate() {
+    let mut h = Harness::new(Autoplay::Off, options());
+    h.perform(Action::SetRate(1.5));
     h.wait("the rate to be 1.5", |s, v| approx(s.rate, 1.5) && v.rate.as_deref() == Some("1.5x"));
+}
 
+#[test]
+fn rates_are_chosen_on_the_speed_page() {
+    // From the last rate, the first one is chosen by selecting it; no action cycles to it.
+    let rates = ui::Options::builder().playback_rates([0.5, 1.0, 1.5, 2.0]).build().unwrap();
+    let mut h = paused_with_bar(rates);
     h.perform(Action::SetRate(2.0));
     h.wait("the rate to be 2", |s, _| approx(s.rate, 2.0));
-    h.perform(Action::CycleRate);
-    h.wait("the rate to wrap to 0.5", |s, _| approx(s.rate, 0.5));
+    h.perform(Action::OpenPage(Page::Speed));
+    h.perform(Action::Select(0));
+    h.wait("the rate to be 0.5", |s, _| approx(s.rate, 0.5));
 
-    // A rate not in the list cycles to the first one.
+    // From a rate not in the list.
+    let rates = ui::Options::builder().playback_rates([0.5, 1.0, 2.0]).build().unwrap();
+    let mut h = paused_with_bar(rates);
     h.perform(Action::SetRate(1.25));
     h.wait("the rate to be 1.25", |s, _| approx(s.rate, 1.25));
-    h.perform(Action::CycleRate);
+    h.perform(Action::OpenPage(Page::Speed));
+    h.perform(Action::Select(0));
     h.wait("the rate to be 0.5", |s, _| approx(s.rate, 0.5));
 
     // Rates round-tripped through mpv still match their entries.
     let odd = ui::Options::builder().playback_rates([0.3, 1.1, 1.7]).build().unwrap();
-    let mut h = Harness::new(Autoplay::Off, odd);
-    for expected in [0.3, 1.1, 1.7, 0.3] {
-        h.perform(Action::CycleRate);
+    let mut h = paused_with_bar(odd);
+    for (index, expected) in [0.3, 1.1, 1.7].into_iter().enumerate() {
+        h.perform(Action::OpenPage(Page::Speed));
+        h.perform(Action::Select(index));
         h.wait(&format!("the rate to be {expected}"), |s, _| approx(s.rate, expected));
+        let mut checked = [false; 3];
+        checked[index] = true;
+        assert_eq!(speed_page_checked(&mut h), checked);
     }
 }
 
 #[test]
+fn rate_set_without_the_menu() {
+    let rates = ui::Options::builder().playback_rates([1.0, 1.5, 2.0]).build().unwrap();
+    let mut h = paused_with_bar(rates);
+    assert_eq!(speed_value(&mut h).as_deref(), Some("1x"));
+
+    h.perform(Action::SetRate(1.5));
+    h.wait("the rate to be 1.5", |s, _| approx(s.rate, 1.5));
+    assert_eq!(speed_value(&mut h).as_deref(), Some("1.5x"));
+    assert_eq!(speed_page_checked(&mut h), [false, true, false]);
+
+    // A rate not in the list is labelled, and nothing is checked.
+    h.perform(Action::SetRate(1.25));
+    h.wait("the rate to be 1.25", |s, _| approx(s.rate, 1.25));
+    assert_eq!(speed_value(&mut h).as_deref(), Some("1.25x"));
+    assert_eq!(speed_page_checked(&mut h), [false, false, false]);
+}
+
+#[test]
 fn no_rates_no_rate_control() {
-    let mut h = Harness::new(Autoplay::Off, ui::Options::builder().playback_rates([]).build().unwrap());
-    assert_eq!(h.controls.view(Instant::now()).rate, None);
-    h.perform(Action::CycleRate);
+    let mut h = paused_with_bar(ui::Options::builder().playback_rates([]).build().unwrap());
+    let view = h.controls.view(Instant::now());
+    assert_eq!(view.rate, None);
+    assert!(!view.settings.button);
+    h.perform(Action::ToggleSettings);
+    h.perform(Action::OpenPage(Page::Speed));
+    assert_eq!(h.controls.view(Instant::now()).settings.menu, None);
     h.drain();
     assert!(approx(h.player.state().rate, 1.0));
 }
