@@ -1,4 +1,4 @@
-//! The seek bar, volume bar and rate control maths, as Video.js computes them.
+//! The seek bar, volume bar and playback rate maths, as Video.js computes them.
 //!
 //! [`Controls`](super::Controls) uses these for its [`View`](super::View); a frontend needs only [`fraction`], to
 //! turn a pointer position into the fraction the seek and volume bar methods take.
@@ -72,14 +72,16 @@ pub fn restored_volume(last_volume: f64) -> f64 {
     last_volume.max(MIN_RESTORED_VOLUME)
 }
 
+/// The index of `current` in `rates`, allowing for the tiny differences of a rate round-tripped through mpv.
+pub fn rate_index(rates: &[f64], current: f64) -> Option<usize> {
+    rates.iter().position(|rate| (rate - current).abs() < RATE_TOLERANCE)
+}
+
 /// The rate the rate control selects next: the one after `current` in `rates`, wrapping around, or the first if
 /// `current` is not in the list. `None` with no rates.
 pub fn next_rate(rates: &[f64], current: f64) -> Option<f64> {
     let first = *rates.first()?;
-    let next = rates
-        .iter()
-        .position(|rate| (rate - current).abs() < RATE_TOLERANCE)
-        .map_or(first, |i| rates[(i + 1) % rates.len()]);
+    let next = rate_index(rates, current).map_or(first, |i| rates[(i + 1) % rates.len()]);
     Some(next)
 }
 
@@ -150,5 +152,7 @@ mod tests {
         assert_eq!(next_rate(&[], 1.0), None);
         // A rate mpv reports back with a tiny floating-point difference still matches its entry.
         assert_eq!(next_rate(&[0.5, 1.1, 2.0], 1.1 + 1e-9), Some(2.0));
+        assert_eq!(rate_index(&[0.5, 1.1, 2.0], 1.1 + 1e-9), Some(1));
+        assert_eq!(rate_index(&[0.5, 2.0], 1.0), None);
     }
 }

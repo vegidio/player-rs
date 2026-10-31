@@ -1,17 +1,19 @@
-//! Draws a [`ControlsView`]: the click target and input handling at its root, the overlays and the control bar.
+//! The Default skin until the designed one replaces it: the overlays and the control bar, each part only while the
+//! [`ui::View`] shows it.
 //!
 //! The look is Video.js 8's default skin (`video-js.css`, 8.10), whose sizes are in `em` of the player's 10 px font;
 //! each constant notes the rule it comes from. Icons are Lucide's, through GPUI-Kit, in place of Video.js's icon font.
 
-use super::{ControlsView, Fullscreen, ToggleFullscreen, ToggleMute, TogglePlay};
+use super::SkinRenderer;
 use crate::assets;
+use crate::controls::{ControlsView, Drag, Fullscreen};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::spinner::Spinner;
 use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{Icon, Sizable, Size};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::*;
-use player::ui::{self, Action, PlayIcon};
+use player::ui::{self, Action, BarPolicy, PlayIcon};
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -77,68 +79,32 @@ const ERROR_TOP: u32 = 0x000000cc;
 const ERROR_BOTTOM: u32 = 0xffffff00;
 const ERROR_FONT: f32 = 14.;
 
-impl Render for ControlsView {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        self.rearm(cx);
-        if !self.bar_drawn() && !self.view.big_play_button && self.focus.contains_focused(window, cx) {
-            // A control that faded out away, or the big play button, had focus: keep the keys in the player.
-            if !self.focus.is_focused(window) {
-                window.focus(&self.focus, cx);
-            }
-        }
+/// The interim Default skin, with Video.js's control-bar policy.
+pub(crate) struct Interim;
 
-        let root = div()
-            .id("controls")
-            .test_support()
-            .track_focus(&self.focus)
+impl SkinRenderer for Interim {
+    fn bar_policy(&self) -> BarPolicy {
+        BarPolicy::default()
+    }
+
+    fn render(&self, view: &ControlsView, window: &mut Window, cx: &mut Context<ControlsView>) -> AnyElement {
+        let shown = &view.view;
+        div()
+            .absolute()
+            .top_0()
+            .left_0()
             .size_full()
-            .relative()
-            .on_key_down(cx.listener(Self::key_down))
-            .on_action(cx.listener(|this, _: &TogglePlay, window, cx| this.action(Action::TogglePlay, window, cx)))
-            .on_action(cx.listener(|this, _: &ToggleMute, window, cx| this.action(Action::ToggleMute, window, cx)))
-            .on_action(
-                cx.listener(|this, _: &ToggleFullscreen, window, cx| this.action(Action::ToggleFullscreen, window, cx)),
-            )
-            .on_mouse_move(cx.listener(|this, _: &MouseMoveEvent, _, cx| this.pointer_moved(cx)))
-            .on_hover(cx.listener(|this, hovered: &bool, _, cx| this.pointer_hovered(*hovered, cx)))
-            .capture_any_mouse_down(cx.listener(|this, _: &MouseDownEvent, _, cx| this.pointer_pressed(cx)))
-            .on_click(cx.listener(Self::video_clicked))
-            .child(self.window_listeners(cx));
-        if !self.view.controls {
-            return root;
-        }
-        root.when(self.view.spinner, |root| root.child(spinner()))
-            .when_some(self.view.error.clone(), |root, message| root.child(error(message)))
-            .when(self.view.big_play_button, |root| root.child(self.big_play_button(cx)))
-            .when(self.bar_drawn(), |root| root.child(self.control_bar(window, cx)))
+            .when(shown.spinner, |root| root.child(spinner()))
+            .when_some(shown.error.clone().filter(|_| shown.shown.error_display), |root, message| {
+                root.child(error(message))
+            })
+            .when(shown.big_play_button, |root| root.child(view.big_play_button(cx)))
+            .when(view.bar_drawn(), |root| root.child(view.control_bar(window, cx)))
+            .into_any_element()
     }
 }
 
 impl ControlsView {
-    /// Window-level pointer listeners, so a drag continues, and a press ends, wherever the pointer goes. They run in
-    /// the capture phase, before anything in the window can stop the event.
-    fn window_listeners(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let this = cx.entity().downgrade();
-        canvas(
-            |_, _, _| {},
-            move |_, _, window, _| {
-                let moved = this.clone();
-                window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
-                    if phase == DispatchPhase::Capture {
-                        let _ = moved.update(cx, |this, cx| this.window_mouse_moved(event, cx));
-                    }
-                });
-                window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
-                    if phase == DispatchPhase::Capture {
-                        let _ = this.update(cx, |this, cx| this.window_mouse_up(event, cx));
-                    }
-                });
-            },
-        )
-        .absolute()
-        .size_0()
-    }
-
     fn control_bar(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let view = &self.view;
         let bar = div()
@@ -163,34 +129,43 @@ impl ControlsView {
                 }
                 cx.stop_propagation();
             }))
-            .child({
+            .when(view.shown.play, |bar| {
                 let (label, action) = match view.play_icon {
                     PlayIcon::Play => ("Play", Action::Play),
                     PlayIcon::Pause => ("Pause", Action::Pause),
                     PlayIcon::Replay => ("Replay", Action::Play),
                 };
-                button("play", control_icon(assets::play(view.play_icon)), label, action, cx)
+                bar.child(button("play", control_icon(assets::play(view.play_icon)), label, action, cx))
             })
-            .child(self.volume_panel(window, cx))
-            .child(self.seek_bar(cx))
-            .child(
-                div()
-                    .id("remaining-time")
-                    .test_support()
-                    .flex_none()
-                    .px(px(TIME_PADDING))
-                    .text_size(px(TIME_FONT))
-                    .line_height(px(BAR_HEIGHT))
-                    .child(view.remaining.clone()),
-            )
+            .when(view.shown.volume, |bar| bar.child(self.volume_panel(window, cx)))
+            // Without the seek bar, an empty space keeps the controls after it on the right.
+            .map(|bar| if view.shown.seek_bar { bar.child(self.seek_bar(cx)) } else { bar.child(div().flex_1()) })
+            .when(view.shown.time_display, |bar| {
+                // Not a focusable control, as in Video.js: a click switches what it shows.
+                bar.child(
+                    div()
+                        .id("time-display")
+                        .test_support()
+                        .flex_none()
+                        .px(px(TIME_PADDING))
+                        .text_size(px(TIME_FONT))
+                        .line_height(px(BAR_HEIGHT))
+                        .cursor_pointer()
+                        .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                            this.perform(Action::ToggleTimeDisplay, window, cx)
+                        }))
+                        .child(view.time_label.clone()),
+                )
+            })
             .when_some(view.rate.clone(), |bar, rate| {
                 let label = div().text_size(px(RATE_FONT)).child(rate);
                 bar.child(button("rate", label, "Playback Rate", Action::CycleRate, cx))
             })
-            .child({
+            .when(view.shown.fullscreen, |bar| {
                 let on = self.fullscreen != Fullscreen::Off;
-                let label = if on { "Exit Fullscreen" } else { "Fullscreen" };
-                button("fullscreen", control_icon(assets::fullscreen(on)), label, Action::ToggleFullscreen, cx)
+                let (icon, label) =
+                    (control_icon(assets::fullscreen(on)), if on { "Exit Fullscreen" } else { "Fullscreen" });
+                bar.child(button("fullscreen", icon, label, Action::ToggleFullscreen, cx))
             });
 
         // Video.js fades with CSS transitions: in over 0.1 s, out over 1 s. The first appearance is not animated.
@@ -208,8 +183,7 @@ impl ControlsView {
     fn volume_panel(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let view = &self.view;
         let label = if view.muted { "Unmute" } else { "Mute" };
-        let expanded =
-            self.volume_hovered || self.drag == Some(super::Drag::Volume) || self.volume_focus.is_focused(window);
+        let expanded = self.volume_hovered || self.drag == Some(Drag::Volume) || self.volume_focus.is_focused(window);
         let bounds = Rc::clone(&self.volume_bounds);
         div()
             .id("volume-panel")

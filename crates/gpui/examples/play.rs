@@ -1,30 +1,33 @@
-//! Plays a local file in a resizable window with Video.js controls, for checking the player element by hand.
+//! Plays a local file in a resizable window, for checking the player element by hand.
 //!
 //! ```sh
-//! cargo run -p player-gpui --example play -- path/to/movie.mp4
+//! cargo run -p player-gpui --example play -- path/to/movie.mp4 [default|none]
 //! ```
 //!
-//! The controls' hotkeys work once the player is clicked: `k` or Space toggles pause, `m` mutes and `f` toggles
-//! fullscreen. Once a second it prints how often the window re-rendered (once per video frame while playing, plus the
-//! controls' own changes, and not at all while paused and idle) and the hardware decoder in use. Fullscreen changes are
-//! printed as they happen.
+//! The optional second argument chooses the skin: `default`, the default, or `none` for bare video, which still takes
+//! clicks and hotkeys. The Default skin offers the default playback rates, and its time display switches between the
+//! remaining time and the duration when clicked. The controls' hotkeys work once the player is clicked: `k` or Space
+//! toggles pause, `m` mutes and `f` toggles fullscreen. Once a second it prints how often the window re-rendered (once
+//! per video frame while playing, plus the controls' own changes, and not at all while paused and idle) and the
+//! hardware decoder in use. Fullscreen changes are printed as they happen.
 
 use gpui_kit::*;
 use player::prelude::*;
 use player::ui;
-use player_gpui::VideoPlayer;
+use player_gpui::{Skin, VideoPlayer};
 use std::process::ExitCode;
 use std::time::Duration;
 
 struct Play {
     player: Player,
     options: ui::Options,
+    skin: Skin,
     renders: usize,
     _report: Task<()>,
 }
 
 impl Play {
-    fn new(player: Player, cx: &mut Context<Self>) -> Self {
+    fn new(player: Player, skin: Skin, cx: &mut Context<Self>) -> Self {
         let report = cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor().timer(Duration::from_secs(1)).await;
@@ -38,8 +41,7 @@ impl Play {
                 }
             }
         });
-        let options = ui::Options::builder().playback_rates([0.5, 1.0, 1.5, 2.0]).build().expect("valid options");
-        Self { player, options, renders: 0, _report: report }
+        Self { player, options: ui::Options::default(), skin, renders: 0, _report: report }
     }
 }
 
@@ -49,6 +51,7 @@ impl Render for Play {
         div().size_full().child(
             VideoPlayer::new("video", &self.player)
                 .options(self.options.clone())
+                .skin(self.skin)
                 .on_fullscreen_change(|on, _, _| eprintln!("fullscreen: {on}"))
                 .size_full(),
         )
@@ -56,9 +59,16 @@ impl Render for Play {
 }
 
 fn main() -> ExitCode {
-    let Some(path) = std::env::args().nth(1) else {
-        eprintln!("usage: play <path>");
-        return ExitCode::from(2);
+    let mut args = std::env::args().skip(1);
+    let usage = || {
+        eprintln!("usage: play <path> [default|none]");
+        ExitCode::from(2)
+    };
+    let Some(path) = args.next() else { return usage() };
+    let skin = match args.next().as_deref() {
+        None | Some("default") => Skin::Default,
+        Some("none") => Skin::None,
+        Some(_) => return usage(),
     };
     let source = match Source::file(&path) {
         Ok(source) => source,
@@ -79,7 +89,7 @@ fn main() -> ExitCode {
 
         let bounds = Bounds::centered(None, size(px(960.), px(540.)), cx);
         let options = WindowOptions { window_bounds: Some(WindowBounds::Windowed(bounds)), ..Default::default() };
-        gpui_kit::open_window(options, cx, |_, cx| cx.new(|cx| Play::new(player, cx))).expect("the window opens");
+        gpui_kit::open_window(options, cx, |_, cx| cx.new(|cx| Play::new(player, skin, cx))).expect("the window opens");
         cx.activate(true);
     });
     ExitCode::SUCCESS

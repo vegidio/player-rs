@@ -68,8 +68,7 @@ struct Movie(Player);
 
 impl Render for Movie {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
-        let bare = player::ui::Options::builder().controls(false).build().unwrap();
-        div().size_full().child(VideoPlayer::new("movie", &self.0).options(bare).size_full())
+        div().size_full().child(VideoPlayer::new("movie", &self.0).skin(crate::Skin::None).size_full())
     }
 }
 

@@ -1,14 +1,15 @@
-//! The Video.js controls over the video: [`ControlsView`] drives a [`ui::Controls`] with GPUI input, and draws its
-//! [`ui::View`] (see `render.rs`).
+//! The controls over the video: [`ControlsView`] drives a [`ui::Controls`] with GPUI input, and its skin (see
+//! `skins`) draws its [`ui::View`].
 
-mod render;
+mod skins;
 #[cfg(test)]
 mod tests;
 
-use crate::keys;
+use crate::{Skin, keys};
 use gpui_kit::*;
 use player::Player;
 use player::ui::{self, Action, Focus, Request};
+use skins::SkinRenderer;
 use std::cell::Cell;
 use std::rc::Rc;
 use std::time::Instant;
@@ -57,11 +58,13 @@ struct Fade {
     out_until: Option<Instant>,
 }
 
-/// Owns one player's [`ui::Controls`] and draws them. Rendered cached over the video, so video frames do not
-/// re-render it; it re-renders when its [`ui::View`] changes, and for its own hover, drag and fullscreen state.
+/// Owns one player's [`ui::Controls`], takes the input for them at its root, and has its skin draw them. Rendered
+/// cached over the video, so video frames do not re-render it; it re-renders when its [`ui::View`] changes, and for
+/// its own hover, drag and fullscreen state.
 pub(crate) struct ControlsView {
     player: Player,
     controls: ui::Controls,
+    skin: &'static dyn SkinRenderer,
     /// The view last computed, which `render` draws.
     view: ui::View,
     /// The time every `ui::Controls` call is given: the executor's clock, which tests advance with `advance_clock`.
@@ -87,13 +90,56 @@ pub(crate) struct ControlsView {
     _window_bounds: Subscription,
 }
 
+impl Render for ControlsView {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.rearm(cx);
+        // A skin that draws nothing from the view is not re-rendered when it changes, and has no control to lose focus.
+        let drawn = !self.skin.draws_view() || self.bar_drawn() || self.view.big_play_button;
+        if !drawn && self.focus.contains_focused(window, cx) {
+            // A control that faded out away, or the big play button, had focus: keep the keys in the player.
+            if !self.focus.is_focused(window) {
+                window.focus(&self.focus, cx);
+            }
+        }
+
+        let skin = self.skin.render(self, window, cx);
+        div()
+            .id("controls")
+            .test_support()
+            .track_focus(&self.focus)
+            .size_full()
+            .relative()
+            .on_key_down(cx.listener(Self::key_down))
+            .on_action(cx.listener(|this, _: &TogglePlay, window, cx| this.perform(Action::TogglePlay, window, cx)))
+            .on_action(cx.listener(|this, _: &ToggleMute, window, cx| this.perform(Action::ToggleMute, window, cx)))
+            .on_action(
+                cx.listener(|this, _: &ToggleFullscreen, window, cx| {
+                    this.perform(Action::ToggleFullscreen, window, cx)
+                }),
+            )
+            .on_mouse_move(cx.listener(|this, _: &MouseMoveEvent, _, cx| this.pointer_moved(cx)))
+            .on_hover(cx.listener(|this, hovered: &bool, _, cx| this.pointer_hovered(*hovered, cx)))
+            .capture_any_mouse_down(cx.listener(|this, _: &MouseDownEvent, _, cx| this.pointer_pressed(cx)))
+            .on_click(cx.listener(Self::video_clicked))
+            .child(self.window_listeners(cx))
+            .child(skin)
+    }
+}
+
 impl ControlsView {
-    pub(crate) fn new(player: &Player, options: ui::Options, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub(crate) fn new(
+        player: &Player,
+        options: ui::Options,
+        skin: Skin,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> Self {
         // Subscribed before the controller reads the player's state, so no event between the two is missed.
         let events = player.subscribe();
         let clock = cx.background_executor().clone();
         let now = clock.now();
-        let controls = ui::Controls::new(player, options, now);
+        let skin = skins::renderer(skin);
+        let controls = ui::Controls::new(player, options, skin.bar_policy(), now);
         let view = controls.view(now);
 
         // Player events are handled on the GUI thread, so `ui::Controls` is only ever used here.
@@ -115,6 +161,7 @@ impl ControlsView {
         Self {
             player: player.clone(),
             controls,
+            skin,
             view,
             clock,
             focus: cx.focus_handle(),
@@ -153,8 +200,8 @@ impl ControlsView {
     /// without re-rendering, and the deadline is re-armed.
     ///
     /// Each re-render also re-renders the views the element is in, so the seek bar's fractions are kept to the bar's
-    /// resolution in pixels: the played part otherwise changes with every position update. With controls off nothing
-    /// is drawn, and nothing re-renders.
+    /// resolution in pixels: the played part otherwise changes with every position update. A skin that draws nothing
+    /// from the view is not re-rendered.
     fn refresh(&mut self, cx: &mut Context<Self>) {
         let now = self.now();
         let mut view = self.controls.view(now);
@@ -167,7 +214,7 @@ impl ControlsView {
         let deadline = std::mem::replace(&mut view.next_deadline, self.view.next_deadline);
         let changed = view != self.view;
         view.next_deadline = deadline;
-        if changed && view.controls {
+        if changed && self.skin.draws_view() {
             if view.control_bar_visible != self.view.control_bar_visible {
                 self.fade.generation += 1;
                 self.fade.out_until = (!view.control_bar_visible).then_some(now + ui::FADE_OUT);
@@ -212,6 +259,30 @@ impl ControlsView {
         self.view.control_bar_visible || self.fade.out_until.is_some()
     }
 
+    /// Window-level pointer listeners, so a drag continues, and a press ends, wherever the pointer goes. They run in
+    /// the capture phase, before anything in the window can stop the event.
+    fn window_listeners(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let this = cx.entity().downgrade();
+        canvas(
+            |_, _, _| {},
+            move |_, _, window, _| {
+                let moved = this.clone();
+                window.on_mouse_event(move |event: &MouseMoveEvent, phase, _, cx| {
+                    if phase == DispatchPhase::Capture {
+                        let _ = moved.update(cx, |this, cx| this.window_mouse_moved(event, cx));
+                    }
+                });
+                window.on_mouse_event(move |event: &MouseUpEvent, phase, _, cx| {
+                    if phase == DispatchPhase::Capture {
+                        let _ = this.update(cx, |this, cx| this.window_mouse_up(event, cx));
+                    }
+                });
+            },
+        )
+        .absolute()
+        .size_0()
+    }
+
     /// Logs a request mpv rejected; there is nobody else to tell.
     fn check(result: player::Result<()>) {
         if let Err(error) = result {
@@ -233,19 +304,7 @@ impl ControlsView {
         self.refresh(cx);
     }
 
-    /// An application action for the player: ignored, so it goes on to the application, with controls off.
-    fn action(&mut self, action: Action, window: &mut Window, cx: &mut Context<Self>) {
-        if self.controls.options().controls() {
-            self.perform(action, window, cx);
-        } else {
-            cx.propagate();
-        }
-    }
-
     fn key_down(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.controls.options().controls() {
-            return;
-        }
         let keystroke = &event.keystroke;
         if keystroke.key == "escape" && !keystroke.modifiers.modified() && self.fullscreen != Fullscreen::Off {
             cx.stop_propagation();

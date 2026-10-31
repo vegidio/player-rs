@@ -23,6 +23,20 @@
 //! Every method takes the current [`Instant`](std::time::Instant), so the layer has no clock of its own and its tests
 //! need no sleeps.
 //!
+//! # Skins
+//!
+//! How the controls look is the frontend's, through its skins; what they do is the same under every skin.
+//!
+//! - **Parts.** [`Options`] say which [`Parts`] are visible. The [`View`] reports each one as shown only when it is
+//!   also available, so a skin never re-derives the rules: Speed needs playback rates, and the Settings button is
+//!   shown while at least one Settings item is.
+//! - **Control-bar policy.** A skin whose design shows the control bar before playback starts, or with its controls
+//!   disabled while an error is shown, passes a [`BarPolicy`] to [`Controls::new`]. The default is Video.js's.
+//! - **Settings menu.** [`Controls`] keeps the menu's state (open, its [`Page`] and the focused entry); a skin draws
+//!   [`View::settings`] and reports [`Focus::Menu`] while an entry has keyboard focus.
+//! - **Clicks and keys** follow [`Options::click`], [`Options::double_click`] and [`Options::hotkeys`], whatever the
+//!   skin draws, including nothing.
+//!
 //! ```no_run
 //! use player::prelude::*;
 //! use player::ui::{self, Focus, Key, Modifiers};
@@ -31,7 +45,7 @@
 //! // `VideoOutput::Render`, the default: the frontend shows the video through a render context or surface renderer.
 //! let player = Player::builder().build()?;
 //! let options = ui::Options::builder().playback_rates([0.5, 1.0, 1.5, 2.0]).aspect_ratio("16:9").build()?;
-//! let mut controls = ui::Controls::new(&player, options, Instant::now());
+//! let mut controls = ui::Controls::new(&player, options, ui::BarPolicy::default(), Instant::now());
 //! let events = player.subscribe();
 //! player.load(Source::url("https://example.com/movie.mp4")?)?;
 //!
@@ -62,6 +76,10 @@
 //!   shortcuts such as Cmd+F keep working. Video.js ignores modifiers. Shift is allowed.
 //! - User activity times out at a deadline instead of Video.js's 250 ms polling, so the control bar hides exactly
 //!   when the inactivity timeout has passed.
+//! - Speed is offered by default, with the rates 0.25 to 3 in steps of 0.25. Video.js offers no rates by default.
+//! - The time display switches between the remaining time and the duration when activated
+//!   ([`Action::ToggleTimeDisplay`]); Video.js shows them in separate fixed components.
+//! - [`Action::Retry`] loads the media again after an error.
 //!
 //! The frontend animates visibility changes with [`FADE_IN`] and [`FADE_OUT`], as Video.js's CSS transitions do.
 
@@ -76,9 +94,12 @@ mod time;
 use std::time::Duration;
 
 pub use action::{Action, Request};
-pub use controls::{Controls, KeyOutcome, PlayIcon, SeekHover, View};
+pub use controls::{
+    BarPolicy, Controls, KeyOutcome, MenuItem, Page, PlayIcon, SeekHover, Settings, SettingsMenu, Shown, TimeDisplay,
+    View,
+};
 pub use keys::{Focus, Key, Modifiers};
-pub use options::{AspectRatio, Hotkeys, Options, OptionsBuilder};
+pub use options::{AspectRatio, Hotkeys, Options, OptionsBuilder, Parts};
 pub use time::{format_rate, format_remaining, format_time};
 
 /// How long the control bar takes to fade in when it becomes visible, as in Video.js.

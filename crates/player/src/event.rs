@@ -222,6 +222,11 @@ impl Shared {
         recovery.failed = false;
     }
 
+    /// The source [`Player::load`](crate::Player::load) last loaded.
+    pub(crate) fn last_source(&self) -> Option<Source> {
+        self.recovery().last.clone()
+    }
+
     /// Records whether a surface renderer exists, and returns the source to load again if its media already failed
     /// for want of one.
     #[cfg(any(target_os = "macos", windows, target_os = "linux"))]

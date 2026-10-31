@@ -1,4 +1,4 @@
-//! [`Options`], the Video.js player options that concern the UI, and their parts.
+//! [`Options`], the Video.js player options that concern the UI, and their [`Parts`].
 
 use crate::error::{Error, Result};
 use crate::player::RATE_RANGE;
@@ -12,7 +12,7 @@ use std::time::Duration;
 /// `Clone`, so one value can configure many players.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Options {
-    controls: bool,
+    parts: Parts,
     poster: Option<String>,
     playback_rates: Vec<f64>,
     aspect_ratio: Option<AspectRatio>,
@@ -22,12 +22,15 @@ pub struct Options {
     hotkeys: Hotkeys,
 }
 
+/// The playback rates offered by default: 0.25 to 3 in steps of 0.25, so Speed is offered without configuration.
+const DEFAULT_RATES: [f64; 12] = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 1.75, 2.0, 2.25, 2.5, 2.75, 3.0];
+
 impl Default for Options {
     fn default() -> Self {
         Self {
-            controls: true,
+            parts: Parts::default(),
             poster: None,
-            playback_rates: vec![],
+            playback_rates: DEFAULT_RATES.to_vec(),
             aspect_ratio: None,
             inactivity_timeout: Duration::from_secs(2),
             click: true,
@@ -43,9 +46,9 @@ impl Options {
         OptionsBuilder::default()
     }
 
-    /// Whether the controls are shown (Video.js `controls`).
-    pub fn controls(&self) -> bool {
-        self.controls
+    /// Which parts of the controls are visible.
+    pub fn parts(&self) -> Parts {
+        self.parts
     }
 
     /// The poster image shown before playback starts (Video.js `poster`).
@@ -53,7 +56,7 @@ impl Options {
         self.poster.as_deref()
     }
 
-    /// The playback rates offered by the rate control (Video.js `playbackRates`). Empty means no rate control.
+    /// The playback rates offered by the Speed setting (Video.js `playbackRates`). Empty means no Speed setting.
     pub fn playback_rates(&self) -> &[f64] {
         &self.playback_rates
     }
@@ -96,8 +99,11 @@ impl Options {
 
 /// Builds [`Options`]; created by [`Options::builder`].
 ///
-/// Unset values default as in Video.js: controls shown, no poster, no playback rates, no fixed aspect ratio, an
-/// inactivity timeout of 2 seconds, and click and double-click enabled. Unlike Video.js, hotkeys are enabled.
+/// Unset values default as in Video.js: every part visible, no poster, no fixed aspect ratio, an inactivity timeout
+/// of 2 seconds, and click and double-click enabled. Unlike Video.js, hotkeys are enabled, and the playback rates are
+/// 0.25 to 3 in steps of 0.25.
+///
+/// There is no option that hides every control: drawing none is the frontend's choice of skin.
 #[derive(Debug, Clone, Default)]
 pub struct OptionsBuilder {
     options: Options,
@@ -105,9 +111,9 @@ pub struct OptionsBuilder {
 }
 
 impl OptionsBuilder {
-    /// Whether the controls are shown. Hidden controls also turn off clicks and double-clicks on the video.
-    pub fn controls(mut self, controls: bool) -> Self {
-        self.options.controls = controls;
+    /// Which parts of the controls are visible, such as `Parts::default().volume(false)`.
+    pub fn parts(mut self, parts: Parts) -> Self {
+        self.options.parts = parts;
         self
     }
 
@@ -117,8 +123,8 @@ impl OptionsBuilder {
         self
     }
 
-    /// The playback rates the rate control cycles through, such as `[0.5, 1.0, 1.5, 2.0]`. Each must be finite and
-    /// within `0.01..=100.0`, or [`build`](Self::build) fails.
+    /// The playback rates the Speed setting offers, such as `[0.5, 1.0, 1.5, 2.0]`. Each must be finite and within
+    /// `0.01..=100.0`, or [`build`](Self::build) fails. An empty list offers no Speed setting.
     pub fn playback_rates(mut self, rates: impl IntoIterator<Item = f64>) -> Self {
         self.options.playback_rates = rates.into_iter().collect();
         self
@@ -179,6 +185,125 @@ impl OptionsBuilder {
             options.aspect_ratio = Some(ratio);
         }
         Ok(options)
+    }
+}
+
+/// Which parts of the controls are visible, as Video.js's per-component options (`controlBar: { volumePanel: false }`,
+/// `bigPlayButton: false` and so on). Every part is visible by default; each method hides or shows one.
+///
+/// A part is drawn only while it is also available: Speed needs playback rates, the error display an error. The
+/// Settings button is not a part of its own: it is shown while at least one Settings item, today only Speed, is.
+/// A skin that has no such part ignores its flag.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct Parts {
+    /// The play control.
+    pub play: bool,
+    /// The volume panel: the mute control and the volume bar.
+    pub volume: bool,
+    /// The seek bar.
+    pub seek_bar: bool,
+    /// The current time.
+    pub current_time: bool,
+    /// The time display: the remaining time or the duration.
+    pub time_display: bool,
+    /// The fullscreen control.
+    pub fullscreen: bool,
+    /// The Speed item of the Settings menu.
+    pub speed: bool,
+    /// The big play button.
+    pub big_play_button: bool,
+    /// The loading spinner.
+    pub spinner: bool,
+    /// The error display.
+    pub error_display: bool,
+    /// The seek bar's hover time.
+    pub seek_hover: bool,
+}
+
+impl Default for Parts {
+    fn default() -> Self {
+        Self {
+            play: true,
+            volume: true,
+            seek_bar: true,
+            current_time: true,
+            time_display: true,
+            fullscreen: true,
+            speed: true,
+            big_play_button: true,
+            spinner: true,
+            error_display: true,
+            seek_hover: true,
+        }
+    }
+}
+
+impl Parts {
+    /// Shows or hides the play control.
+    pub fn play(mut self, visible: bool) -> Self {
+        self.play = visible;
+        self
+    }
+
+    /// Shows or hides the volume panel.
+    pub fn volume(mut self, visible: bool) -> Self {
+        self.volume = visible;
+        self
+    }
+
+    /// Shows or hides the seek bar.
+    pub fn seek_bar(mut self, visible: bool) -> Self {
+        self.seek_bar = visible;
+        self
+    }
+
+    /// Shows or hides the current time.
+    pub fn current_time(mut self, visible: bool) -> Self {
+        self.current_time = visible;
+        self
+    }
+
+    /// Shows or hides the time display.
+    pub fn time_display(mut self, visible: bool) -> Self {
+        self.time_display = visible;
+        self
+    }
+
+    /// Shows or hides the fullscreen control.
+    pub fn fullscreen(mut self, visible: bool) -> Self {
+        self.fullscreen = visible;
+        self
+    }
+
+    /// Shows or hides the Speed item of the Settings menu.
+    pub fn speed(mut self, visible: bool) -> Self {
+        self.speed = visible;
+        self
+    }
+
+    /// Shows or hides the big play button.
+    pub fn big_play_button(mut self, visible: bool) -> Self {
+        self.big_play_button = visible;
+        self
+    }
+
+    /// Shows or hides the loading spinner.
+    pub fn spinner(mut self, visible: bool) -> Self {
+        self.spinner = visible;
+        self
+    }
+
+    /// Shows or hides the error display. The error is still reported in [`View::error`](super::View::error).
+    pub fn error_display(mut self, visible: bool) -> Self {
+        self.error_display = visible;
+        self
+    }
+
+    /// Shows or hides the seek bar's hover time.
+    pub fn seek_hover(mut self, visible: bool) -> Self {
+        self.seek_hover = visible;
+        self
     }
 }
 
@@ -323,9 +448,10 @@ mod tests {
     #[test]
     fn defaults() {
         let options = Options::builder().build().unwrap();
-        assert!(options.controls());
+        assert_eq!(options.parts(), Parts::default());
         assert_eq!(options.poster(), None);
-        assert!(options.playback_rates().is_empty());
+        let rates: Vec<f64> = (1..=12).map(|step| f64::from(step) * 0.25).collect();
+        assert_eq!(options.playback_rates(), rates);
         assert_eq!(options.aspect_ratio(), None);
         assert_eq!(options.inactivity_timeout(), Duration::from_secs(2));
         assert!(options.click() && options.double_click());
@@ -336,7 +462,7 @@ mod tests {
     #[test]
     fn set_values() {
         let options = Options::builder()
-            .controls(false)
+            .parts(Parts::default().volume(false))
             .poster("poster.jpg")
             .playback_rates([0.5, 1.0, 2.0])
             .inactivity_timeout(Duration::ZERO)
@@ -345,12 +471,53 @@ mod tests {
             .hotkeys(Hotkeys::disabled())
             .build()
             .unwrap();
-        assert!(!options.controls());
+        assert!(!options.parts().volume);
         assert_eq!(options.poster(), Some("poster.jpg"));
         assert_eq!(options.playback_rates(), [0.5, 1.0, 2.0]);
         assert_eq!(options.inactivity_timeout(), Duration::ZERO);
         assert!(!options.click() && !options.double_click());
         assert!(!options.hotkeys().is_enabled());
+    }
+
+    #[test]
+    fn empty_rates() {
+        let options = Options::builder().playback_rates([]).build().unwrap();
+        assert!(options.playback_rates().is_empty());
+    }
+
+    #[test]
+    fn parts() {
+        let all = Parts::default();
+        let flags = |p: Parts| {
+            [
+                p.play,
+                p.volume,
+                p.seek_bar,
+                p.current_time,
+                p.time_display,
+                p.fullscreen,
+                p.speed,
+                p.big_play_button,
+                p.spinner,
+                p.error_display,
+                p.seek_hover,
+            ]
+        };
+        assert!(flags(all).iter().all(|shown| *shown));
+        let none = all
+            .play(false)
+            .volume(false)
+            .seek_bar(false)
+            .current_time(false)
+            .time_display(false)
+            .fullscreen(false)
+            .speed(false)
+            .big_play_button(false)
+            .spinner(false)
+            .error_display(false)
+            .seek_hover(false);
+        assert!(flags(none).iter().all(|shown| !*shown));
+        assert_eq!(none.speed(true), Parts { speed: true, ..none });
     }
 
     #[test]

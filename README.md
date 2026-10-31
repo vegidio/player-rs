@@ -80,24 +80,45 @@ $ cargo run -p player-gpui --example play -- path/to/movie.mp4
 
 ### Customising the controls
 
-`VideoPlayer::options` takes a `player::ui::Options`, which mirrors Video.js's options (`controls`, `poster`, `playbackRates`, `aspectRatio`, `inactivityTimeout`, `userActions`):
+`VideoPlayer::skin` chooses how the controls look, and `VideoPlayer::options` takes a `player::ui::Options`, which mirrors Video.js's options (`poster`, `playbackRates`, `aspectRatio`, `inactivityTimeout`, `userActions`, and per-component options such as `controlBar: { volumePanel: false }`):
 
 ```rust,ignore
-use player::ui;
+use player::ui::{self, Parts};
+use player_gpui::{Skin, VideoPlayer};
 
 let options = ui::Options::builder()
     .playback_rates([0.5, 1.0, 1.5, 2.0])
+    .parts(Parts::default().volume(false))
     .build()?;
 
 VideoPlayer::new("movie", &self.player)
+    .skin(Skin::Default)
     .options(options)
     .on_fullscreen_change(|on, _, _| println!("fullscreen: {on}"))
     .size_full()
 ```
 
-- **Controls are on by default.** For bare video, pass `ui::Options::builder().controls(false).build()?`.
-- **Options are read once**, as in Video.js: when the element's state is created and when it's given a different player.
+- **Skins.** `Skin::Default`, the default, draws the player's controls. `Skin::None` draws nothing over the video: no controls, overlays, spinner or error display.
+- **Every part is visible by default.** `Parts` hides any of them: play, volume, seek bar, current time, time display, fullscreen, Speed, big play button, spinner, error display and seek hover time. The Settings button shows while at least one of its items (today only Speed) does.
+- **Speed is offered by default**, with the rates 0.25x to 3x in steps of 0.25. Pass `playback_rates([])` or `Parts::default().speed(false)` to offer none.
+- **The time display** shows the remaining time; clicking it switches to the duration and back.
+- **Clicks and keys don't depend on the skin.** They follow the `click`, `double_click` and `hotkeys` options under every skin, `Skin::None` included.
+- **Options and skin are read once**, as in Video.js: when the element's state is created and when it's given a different player.
 - **Aspect ratio.** With one set, the element's height follows its width (Video.js's fluid mode).
+
+#### Migrating from `controls(false)`
+
+`ui::Options::builder().controls(false)` is gone. For bare video, use `VideoPlayer::skin(Skin::None)`. `controls(false)` also turned off clicks and keys; to keep that, add the options for it:
+
+```rust,ignore
+let options = ui::Options::builder()
+    .click(false)
+    .double_click(false)
+    .hotkeys(ui::Hotkeys::disabled())
+    .build()?;
+
+VideoPlayer::new("movie", &self.player).skin(Skin::None).options(options)
+```
 
 ### Mouse and keyboard
 
@@ -219,7 +240,7 @@ gpui-pre-wgpu = { git = "https://github.com/vegidio/gpui-pre", tag = "0.3.10-sur
   | Windows | `player::windows::SurfaceRenderer` | Direct3D 11 texture shared through an NT handle, BGRA |
   | Linux   | `player::linux::SurfaceRenderer`   | Single-plane dma-buf, RGBA (`DRM_FORMAT_ABGR8888`)    |
 
-- **`player::ui::Controls`** holds every Video.js interaction rule that isn't drawing: control-bar hiding, seek-bar scrubbing, hotkeys, time labels. A frontend forwards its input and events, and draws the `view()` it returns, so every frontend behaves the same.
+- **`player::ui::Controls`** holds every Video.js interaction rule that isn't drawing: control-bar hiding, seek-bar scrubbing, hotkeys, time labels, which parts are shown, the Settings menu and Retry. A frontend forwards its input and events, and draws the `view()` it returns with its skins, so every frontend behaves the same.
 
 ### Audio-only or headless use
 

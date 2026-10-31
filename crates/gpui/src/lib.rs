@@ -3,7 +3,7 @@
 //! The [GPUI](https://gpui.rs) front end of `player-rs`: a video player component with the look and behaviour of
 //! [Video.js](https://videojs.org) for apps built with GPUI-Kit.
 //!
-//! [`VideoPlayer`] shows a player's video with Video.js's controls over it.
+//! [`VideoPlayer`] shows a player's video with controls over it, drawn by its [`Skin`].
 //!
 //! ```no_run
 //! use gpui_kit::*;
@@ -76,12 +76,16 @@
 //!
 //! # Controls
 //!
-//! The controls follow Video.js 8's default skin, and their behaviour is `player::ui`'s, shared with every frontend:
+//! The controls' behaviour is `player::ui`'s, shared with every frontend, and their look is the [`Skin`]'s:
+//! [`Skin::Default`], which until its designed look arrives follows Video.js 8's default skin, or [`Skin::None`],
+//! which draws nothing over the video while clicks and keys keep working. Under the Default skin:
 //!
 //! - **Control bar**: play/pause/replay, mute with a volume bar that expands while the panel is hovered or the bar
 //!   focused, the seek bar (buffered and played parts, a time label on hover, Video.js's press, drag and release
-//!   scrubbing), the remaining time, a playback-rate button when [rates](player::ui::OptionsBuilder::playback_rates)
-//!   are set, and fullscreen. It fades out after the inactivity timeout while playing, and back in on input.
+//!   scrubbing), the time display (the remaining time, or the duration once clicked), a playback-rate button while
+//!   the Speed setting is offered, and fullscreen. It fades out after the inactivity timeout while playing, and back
+//!   in on input.
+//! - **Parts**: every part is shown by default; [`Parts`](player::ui::Parts) in the options hides any of them.
 //! - **Overlays**: the centred big play button before playback starts, the loading spinner, and the error display.
 //! - **Pointer**: clicking the video toggles play and double-clicking toggles fullscreen, unless the options turn
 //!   them off.
@@ -89,9 +93,11 @@
 //!   to `player::ui`'s key map for the focused part: the seek-bar and volume-bar keys, and the hotkeys as configured.
 //!   Keys it does not handle, including every key held with Ctrl, Alt or the platform key, go on to the app. The
 //!   [`TogglePlay`], [`ToggleMute`] and [`ToggleFullscreen`] actions let the app's menus drive the focused player.
-//! - **Options.** [`VideoPlayer::options`] takes `player::ui::Options`. **Controls are on by default**; for bare
-//!   video, pass `ui::Options::builder().controls(false).build()?`. As in Video.js, the options are read once: when
-//!   the element's state is created and when it is given a different player.
+//! - **Options and skin.** [`VideoPlayer::options`] takes `player::ui::Options`, and [`VideoPlayer::skin`] the skin.
+//!   For bare video, use [`Skin::None`]; it replaces the former `controls(false)` option, which also turned off clicks
+//!   and keys, now their own options under every skin. Speed is offered by default, with the rates 0.25x to 3x;
+//!   `playback_rates([])` offers none. As in Video.js, the options and the skin are read once: when the element's
+//!   state is created and when it is given a different player.
 //! - **Fullscreen is the window's.** Video.js makes the player element fill the screen; a GPUI element cannot, so the
 //!   fullscreen control, `f`, double-click and the action toggle the window's fullscreen, and Escape leaves it.
 //!   [`VideoPlayer::on_fullscreen_change`] tells the app, including when the window leaves fullscreen by other
@@ -119,8 +125,8 @@
 //!   Wherever the element is black, audio and the controls keep working.
 //! - **Cursor.** Unlike Video.js, the pointer cursor stays visible while the user is inactive: GPUI has no way to hide
 //!   it on demand.
-//! - **Not yet.** The rate button cycles the rates instead of opening Video.js's menu. Menus (rates, tracks),
-//!   captions and the poster come in later releases.
+//! - **Not yet.** The rate button cycles the rates instead of opening the Settings menu, which `player::ui` already
+//!   models. The designed Default skin, menus (Settings, tracks), captions and the poster come in later releases.
 
 // GPUI's derive macros name the `gpui` crate; through this alias they resolve to the GPUI that GPUI-Kit re-exports.
 extern crate gpui_kit as gpui;
@@ -144,7 +150,7 @@ mod video;
 
 pub use assets::{Assets, Icons};
 pub use controls::{ToggleFullscreen, ToggleMute, TogglePlay};
-pub use element::VideoPlayer;
+pub use element::{Skin, VideoPlayer};
 
 // The README's examples, compiled as doc tests.
 #[cfg(doctest)]

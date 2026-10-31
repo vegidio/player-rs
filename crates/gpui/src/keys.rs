@@ -3,8 +3,8 @@
 use gpui_kit::Keystroke;
 use player::ui::{Key, Modifiers};
 
-/// The UI layer's key and modifiers for a GPUI keystroke, or `None` for a key it has no name for (function keys,
-/// Escape, Tab and so on), which then goes to the application.
+/// The UI layer's key and modifiers for a GPUI keystroke, or `None` for a key it has no name for (function keys, Tab
+/// and so on), which then goes to the application.
 pub(crate) fn translate(keystroke: &Keystroke) -> Option<(Key, Modifiers)> {
     let key = match keystroke.key.as_str() {
         "space" => Key::Space,
@@ -17,6 +17,7 @@ pub(crate) fn translate(keystroke: &Keystroke) -> Option<(Key, Modifiers)> {
         "end" => Key::End,
         "pageup" => Key::PageUp,
         "pagedown" => Key::PageDown,
+        "escape" => Key::Escape,
         other => {
             let mut chars = other.chars();
             match (chars.next(), chars.next()) {
@@ -51,6 +52,7 @@ mod tests {
             ("end", Key::End),
             ("pageup", Key::PageUp),
             ("pagedown", Key::PageDown),
+            ("escape", Key::Escape),
         ];
         for (source, key) in named {
             assert_eq!(parse(source), Some((key, Modifiers::NONE)), "{source}");
@@ -69,7 +71,7 @@ mod tests {
 
     #[test]
     fn unknown_keys() {
-        for source in ["escape", "tab", "f1", "backspace", "delete"] {
+        for source in ["tab", "f1", "backspace", "delete"] {
             assert_eq!(parse(source), None, "{source}");
         }
     }

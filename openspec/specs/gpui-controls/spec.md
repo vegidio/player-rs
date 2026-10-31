@@ -6,14 +6,14 @@ Gives the GPUI video element the controls and interaction of a Video.js player: 
 
 ### Requirement: Player options on the element
 
-The video element SHALL accept the player UI options and SHALL default to the default options, under which controls are shown. The options SHALL take effect when the element's state is created and whenever the element is given a different player; changing them on a later render with the same id and player SHALL have no effect, as Video.js reads its options once at construction. With controls disabled, the element SHALL draw no control, overlay or button, and SHALL ignore clicks, double-clicks and keys meant for the player.
+The video element SHALL accept the player UI options and SHALL default to the default options, under which every part is visible. The options SHALL take effect when the element's state is created and whenever the element is given a different player; changing them on a later render with the same id and player SHALL have no effect, as Video.js reads its options once at construction. Clicks, double-clicks and keys meant for the player SHALL follow the click, double-click and hotkey options under every skin, including a skin that draws no controls.
 
 #### Scenario: Default options
-- **WHEN** an application shows a video element without passing options
-- **THEN** the element shows Video.js controls
+- **WHEN** an application shows a video element without passing options or a skin
+- **THEN** the element shows the Default skin's controls with every part visible
 
 #### Scenario: Controls disabled
-- **WHEN** the element is given options with controls disabled and the video is clicked
+- **WHEN** an application wants bare video, chooses the None skin with the click option disabled, and the video is clicked
 - **THEN** no control is drawn and playback does not change
 
 #### Scenario: Options changed later
@@ -34,28 +34,36 @@ When the options set an aspect ratio, the element's height SHALL follow its widt
 
 ### Requirement: Control bar contents and look
 
-The control bar SHALL run along the bottom of the element over the video, with Video.js's default-skin look:
+Until the designed Default skin replaces it, the Default skin's control bar SHALL run along the bottom of the element over the video, with Video.js's default-skin look:
 - a translucent dark background
 - white icons and text
 - a fixed height, independent of the element's size
 
-It SHALL contain, from left to right:
+It SHALL contain, from left to right, each only while the UI layer reports its part as shown:
 1. the play control, whose icon is play, pause or replay as the UI layer says
 2. the volume panel: a mute control, whose icon shows the volume level (0 muted, 1, 2, 3 loud), followed by a horizontal volume bar
 3. the seek bar, taking the remaining width
-4. the remaining-time label, such as `-1:18`
-5. the playback-rate control, labelled with the current rate such as `1.5x`, only when playback rates are configured
+4. the time display, such as `-1:18`, which switches between the remaining time and the duration when clicked
+5. the playback-rate control, labelled with the current rate such as `1.5x`, while the Speed item is offered
 6. the fullscreen control, whose icon is enter fullscreen, or exit fullscreen while the player is fullscreen
 
-Each control SHALL show a tooltip naming what it does: Play, Pause, Replay, Mute, Unmute, Playback Rate, Fullscreen or Exit Fullscreen. As in Video.js's default skin, the current time and duration SHALL not be shown. All labels SHALL stay current while media plays.
+Each control SHALL show a tooltip naming what it does: Play, Pause, Replay, Mute, Unmute, Playback Rate, Fullscreen or Exit Fullscreen. All labels SHALL stay current while media plays.
 
 #### Scenario: Bar while paused
 - **WHEN** 2-minute media is paused at 0:42 with volume 0.5 and no playback rates configured
 - **THEN** the control bar shows, in order, a play icon, a level-2 volume icon and the volume bar, the seek bar a little over a third played, `-1:18`, and the enter-fullscreen icon, with no rate control
 
+#### Scenario: Hidden parts
+- **WHEN** the options hide the volume and fullscreen parts
+- **THEN** the control bar shows no mute control, volume bar or fullscreen control, and the seek bar takes the freed width
+
 #### Scenario: Rate control
 - **WHEN** playback rates `[1, 1.5, 2]` are configured, the rate is 1 and the rate control is clicked
 - **THEN** the rate becomes 1.5 and the control reads `1.5x`
+
+#### Scenario: Time display toggle
+- **WHEN** 2-minute media is paused at 0:42 and the time display is clicked
+- **THEN** it reads `2:00` instead of `-1:18`, and playback does not change
 
 #### Scenario: Ended
 - **WHEN** media has played to its end
@@ -63,7 +71,7 @@ Each control SHALL show a tooltip naming what it does: Play, Pause, Replay, Mute
 
 #### Scenario: Remaining time follows playback
 - **WHEN** 2-minute media plays from 0:10 to 0:20
-- **THEN** the remaining-time label changes from `-1:50` to `-1:40`
+- **THEN** the time display changes from `-1:50` to `-1:40`
 
 ### Requirement: Control bar visibility and fading
 
@@ -124,9 +132,9 @@ Clicking the mute control SHALL toggle mute as the UI layer defines, including r
 
 ### Requirement: Overlays
 
-The element SHALL show the following, each as the UI layer reports it:
-- **Big play button**: while it is shown, a Video.js big play button, a play icon on a translucent rounded box, centred over the video as in Video.js 8's default skin. Clicking it SHALL start playback.
-- **Loading spinner**: a spinning indicator centred over the video while the spinner is shown.
+The element's Default skin SHALL show the following, each as the UI layer reports it and only while its part is shown:
+- **Big play button**: a Video.js big play button, a play icon on a translucent rounded box, centred over the video as in Video.js 8's default skin. Clicking it SHALL start playback.
+- **Loading spinner**: a spinning indicator centred over the video.
 - **Error display**: when media failed to load, a dark layer over the video with the error message centred on it.
 
 #### Scenario: Big play button
@@ -136,6 +144,10 @@ The element SHALL show the following, each as the UI layer reports it:
 #### Scenario: Spinner
 - **WHEN** playback waits for the network for longer than 0.3 seconds
 - **THEN** a spinner is shown in the centre of the video until playback resumes
+
+#### Scenario: Spinner hidden
+- **WHEN** the spinner part is hidden and playback waits for the network for longer than 0.3 seconds
+- **THEN** no spinner is shown
 
 #### Scenario: Error
 - **WHEN** a source that cannot be opened is loaded
@@ -213,6 +225,38 @@ The crate SHALL provide an asset source that serves every icon its controls draw
 #### Scenario: Composed source
 - **WHEN** an application composes the crate's extra icons with its own asset source and GPUI-Kit's default bundle
 - **THEN** every control icon is drawn
+
+### Requirement: Skins
+
+The video element SHALL accept a skin, which decides how the controls look, chosen from the skins the crate provides: Default and None. Without one, the element SHALL use Default. Like the options, the skin SHALL take effect when the element's state is created and whenever the element is given a different player. Whatever the skin, the element SHALL keep the same input, keyboard, focus, actions and fullscreen behaviour.
+
+#### Scenario: Default skin
+- **WHEN** an application shows a video element without choosing a skin
+- **THEN** the Default skin's controls are drawn
+
+#### Scenario: Skin changed later
+- **WHEN** the element is rendered again with the same id and player but a different skin
+- **THEN** the element keeps the first skin
+
+### Requirement: None skin
+
+The None skin SHALL draw no control, overlay, button, spinner, error display or poster over the video. Clicks, double-clicks, hotkeys and the application's play/pause, mute and fullscreen actions SHALL keep working as the options say.
+
+#### Scenario: Nothing drawn
+- **WHEN** the element uses the None skin and media is loaded with autoplay off
+- **THEN** only the video area is drawn
+
+#### Scenario: Clicks still work
+- **WHEN** the element uses the None skin, the click option is enabled, media is paused and the video is clicked
+- **THEN** playback starts
+
+#### Scenario: Clicks disabled
+- **WHEN** the element uses the None skin, the click option is disabled and the video is clicked
+- **THEN** playback does not change
+
+#### Scenario: Hotkeys
+- **WHEN** the element uses the None skin, is focused, and `m` is pressed
+- **THEN** the player is muted
 
 ### Requirement: Controls platform coverage
 

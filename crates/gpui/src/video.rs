@@ -232,10 +232,9 @@ pub(crate) mod tests {
         fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
             self.renders += 1;
             // Bare video: the controls re-render with the played bar, which these tests do not measure.
-            let bare = player::ui::Options::builder().controls(false).build().unwrap();
             let videos = self.players.iter().enumerate().map(|(id, player)| {
                 VideoPlayer::new(ElementId::Integer(id as u64), player)
-                    .options(bare.clone())
+                    .skin(crate::Skin::None)
                     .w(px(320.))
                     .h(px(180.))
             });

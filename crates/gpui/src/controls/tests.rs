@@ -6,7 +6,7 @@
 //! and fades run on the test executor's clock instead, which only `advance_clock` moves.
 
 use super::*;
-use crate::VideoPlayer;
+use crate::{Skin, VideoPlayer};
 use gpui_kit::TestAppContext;
 use gpui_kit::base::Root;
 use gpui_kit::test::TestWindowExt;
@@ -79,6 +79,7 @@ enum Sizing {
 struct Parent {
     player: Player,
     options: ui::Options,
+    skin: Skin,
     sizing: Sizing,
     keys: Rc<RefCell<Vec<String>>>,
     fullscreen: Rc<RefCell<Vec<bool>>>,
@@ -89,6 +90,7 @@ impl Render for Parent {
         let fullscreen = Rc::clone(&self.fullscreen);
         let element = VideoPlayer::new("video", &self.player)
             .options(self.options.clone())
+            .skin(self.skin)
             .on_fullscreen_change(move |on, _, _| fullscreen.borrow_mut().push(on));
         let element = match self.sizing {
             Sizing::Fixed(width, height) => element.w(px(width)).h(px(height)),
@@ -116,6 +118,7 @@ struct Setup {
     autoplay: Autoplay,
     volume: f64,
     options: ui::Options,
+    skin: Skin,
     media: Media,
     sizing: Sizing,
 }
@@ -126,6 +129,7 @@ impl Default for Setup {
             autoplay: Autoplay::On,
             volume: 1.0,
             options: ui::Options::default(),
+            skin: Skin::Default,
             media: Media::Wav(30),
             sizing: Sizing::Fixed(640., 360.),
         }
@@ -151,6 +155,7 @@ impl Harness {
         let parent = cx.new(|_| Parent {
             player: player.clone(),
             options: setup.options,
+            skin: setup.skin,
             sizing: setup.sizing,
             keys: Rc::default(),
             fullscreen: Rc::default(),
@@ -376,20 +381,37 @@ fn inactivity_hides_the_bar_while_playing(cx: &mut TestAppContext) {
 fn options_are_read_once_per_player(cx: &mut TestAppContext) {
     let harness = Harness::open(cx, Setup { autoplay: Autoplay::Off, ..Setup::default() });
     let first = harness.view().entity_id();
-    let rates = options().playback_rates([1.0, 2.0]).build().unwrap();
+    let no_rates = options().playback_rates([]).build().unwrap();
 
     // The same player under the same id keeps the first options.
-    harness.change_parent(cx, |parent| parent.options = rates.clone());
+    harness.change_parent(cx, |parent| parent.options = no_rates.clone());
     assert_eq!(harness.view().entity_id(), first);
-    assert_eq!(harness.drawn(cx).rate, None);
+    assert_eq!(harness.drawn(cx).rate.as_deref(), Some("1x"));
 
     // A different player rebuilds the controls with the options given then.
     let other = player(Autoplay::Off, 1.0);
     harness.change_parent(cx, |parent| parent.player = other.clone());
-    harness.wait_view(cx, "the new controls", |view| view.rate.is_some());
+    harness.wait_view(cx, "the new controls", |view| view.rate.is_none());
     let view = harness.view();
     assert_ne!(view.entity_id(), first);
     assert!(cx.read(|cx| Player::ptr_eq(view.read(cx).player(), &other)));
+}
+
+#[gpui_kit::test]
+fn skin_is_read_once_per_player(cx: &mut TestAppContext) {
+    let harness = Harness::open(cx, Setup { autoplay: Autoplay::Off, ..Setup::default() });
+    assert!(harness.find(cx, "big-play").is_some());
+
+    // The same player under the same id keeps the first skin.
+    harness.change_parent(cx, |parent| parent.skin = Skin::None);
+    assert!(harness.find(cx, "big-play").is_some());
+
+    // A different player takes the skin given then.
+    let other = player(Autoplay::Off, 1.0);
+    harness.change_parent(cx, |parent| parent.player = other.clone());
+    let view = harness.view();
+    assert!(cx.read(|cx| Player::ptr_eq(view.read(cx).player(), &other)));
+    assert!(harness.find(cx, "big-play").is_none());
 }
 
 // 1.4: fluid sizing.
@@ -451,10 +473,41 @@ fn mute_control_toggles(cx: &mut TestAppContext) {
 
 #[gpui_kit::test]
 fn no_rate_control_without_rates(cx: &mut TestAppContext) {
-    let harness = Harness::open(cx, Setup::default());
+    let setup = Setup { options: options().playback_rates([]).build().unwrap(), ..Setup::default() };
+    let harness = Harness::open(cx, setup);
     harness.wait_playing(cx);
-    assert!(harness.find(cx, "play").is_some() && harness.find(cx, "remaining-time").is_some());
+    assert!(harness.find(cx, "play").is_some() && harness.find(cx, "time-display").is_some());
     assert!(harness.find(cx, "rate").is_none());
+}
+
+#[gpui_kit::test]
+fn hidden_parts(cx: &mut TestAppContext) {
+    let parts = ui::Parts::default().volume(false).fullscreen(false);
+    let harness = Harness::open(cx, Setup { options: options().parts(parts).build().unwrap(), ..Setup::default() });
+    harness.wait_playing(cx);
+    for id in ["mute", "volume-panel", "volume-bar", "fullscreen"] {
+        assert!(harness.find(cx, id).is_none(), "{id}");
+    }
+    // The seek bar takes the freed width: it runs from the play control to the time display, and the rate control
+    // ends the bar.
+    let seek = harness.bounds(cx, "seek-bar");
+    assert_eq!(seek.left(), harness.bounds(cx, "play").right());
+    assert_eq!(seek.right(), harness.bounds(cx, "time-display").left());
+    assert_eq!(harness.bounds(cx, "rate").right(), harness.bounds(cx, "control-bar").right());
+}
+
+#[gpui_kit::test]
+fn time_display_toggle(cx: &mut TestAppContext) {
+    let harness = Harness::open(cx, Setup { media: Media::Wav(120), ..Setup::default() });
+    harness.wait_playing(cx);
+    harness.player.pause().unwrap();
+    harness.player.seek(player::Seek::To(Duration::from_millis(42_500))).unwrap();
+    harness.wait(cx, "0:42", |state, view| state.paused && view.time_label == "-1:18");
+    harness.click(cx, "time-display");
+    assert_eq!(harness.drawn(cx).time_label, "2:00");
+    assert!(harness.player.state().paused, "playback does not change");
+    harness.click(cx, "time-display");
+    assert_eq!(harness.drawn(cx).time_label, "-1:18");
 }
 
 #[gpui_kit::test]
@@ -465,8 +518,8 @@ fn remaining_time_follows_playback(cx: &mut TestAppContext) {
     // Half a second past each mark: mpv's default seek may land a little before it, and the label counts whole seconds.
     for (at, label) in [(10_500, "-1:50"), (20_500, "-1:40")] {
         harness.player.seek(player::Seek::To(Duration::from_millis(at))).unwrap();
-        harness.wait_view(cx, label, |view| view.remaining == label);
-        assert!(harness.find(cx, "remaining-time").is_some());
+        harness.wait_view(cx, label, |view| view.time_label == label);
+        assert!(harness.find(cx, "time-display").is_some());
     }
 }
 
@@ -620,7 +673,7 @@ fn control_click_is_not_a_video_click(cx: &mut TestAppContext) {
     harness.click(cx, "mute");
     harness.wait_view(cx, "mute", |view| view.muted);
     harness.click(cx, "control-bar");
-    harness.click(cx, "remaining-time");
+    harness.click(cx, "time-display");
     assert!(!harness.player.state().paused);
 }
 
@@ -719,23 +772,65 @@ fn spinner_is_centred(cx: &mut TestAppContext) {
     }
 }
 
+// The None skin.
+
+const DRAWN: [&str; 7] = ["big-play", "control-bar", "play", "seek-bar", "error", "spinner", "seek-label"];
+
 #[gpui_kit::test]
-fn controls_off_draws_nothing_and_ignores_input(cx: &mut TestAppContext) {
-    let setup =
-        Setup { autoplay: Autoplay::Off, options: options().controls(false).build().unwrap(), ..Setup::default() };
-    let harness = Harness::open(cx, setup);
-    for id in ["big-play", "control-bar", "play", "seek-bar", "error", "spinner"] {
+fn none_skin_draws_nothing(cx: &mut TestAppContext) {
+    let harness = Harness::open(cx, Setup { autoplay: Autoplay::Off, skin: Skin::None, ..Setup::default() });
+    for id in DRAWN {
         assert!(harness.find(cx, id).is_none(), "{id}");
     }
+    assert_eq!(harness.bounds(cx, "controls").size, size(px(640.), px(360.)), "only the video area");
+}
+
+#[gpui_kit::test]
+fn none_skin_draws_no_error(cx: &mut TestAppContext) {
+    let harness = Harness::open(cx, Setup { media: Media::Broken, skin: Skin::None, ..Setup::default() });
+    assert!(harness.drawn(cx).error.is_some());
+    assert!(harness.find(cx, "error").is_none());
+}
+
+#[gpui_kit::test]
+fn none_skin_clicks_still_work(cx: &mut TestAppContext) {
+    let harness = Harness::open(cx, Setup { autoplay: Autoplay::Off, skin: Skin::None, ..Setup::default() });
+    harness.click(cx, "controls");
+    harness.wait_playing(cx);
+    harness.update(cx, |window, cx| window.double_click("controls", cx));
+    harness.draw(cx);
+    assert!(harness.window_fullscreen(cx));
+    for id in DRAWN {
+        assert!(harness.find(cx, id).is_none(), "{id}");
+    }
+}
+
+#[gpui_kit::test]
+fn none_skin_clicks_disabled(cx: &mut TestAppContext) {
+    let setup = Setup {
+        autoplay: Autoplay::Off,
+        options: options().click(false).double_click(false).build().unwrap(),
+        skin: Skin::None,
+        ..Setup::default()
+    };
+    let harness = Harness::open(cx, setup);
     harness.click(cx, "controls");
     harness.update(cx, |window, cx| window.double_click("controls", cx));
-    harness.focus(cx, |view| view.focus.clone());
-    harness.press(cx, "k");
-    harness.press(cx, "f");
     harness.draw(cx);
-    assert!(harness.player.state().paused, "clicks and keys do not play");
+    assert!(harness.player.state().paused);
     assert!(!harness.window_fullscreen(cx));
-    assert_eq!(harness.keys(cx), ["k", "f"], "keys go on to the application");
+}
+
+#[gpui_kit::test]
+fn none_skin_hotkeys(cx: &mut TestAppContext) {
+    let harness = Harness::open(cx, Setup { skin: Skin::None, ..Setup::default() });
+    harness.wait_playing(cx);
+    harness.focus(cx, |view| view.focus.clone());
+    harness.press(cx, "m");
+    harness.wait(cx, "mute", |state, _| state.muted);
+    harness.update(cx, |window, cx| window.dispatch_action(Box::new(crate::TogglePlay), cx));
+    harness.wait_paused(cx);
+    assert!(harness.keys(cx).is_empty(), "the player handles them");
 }
 
 // 2.6: keyboard input and focus.
@@ -824,7 +919,7 @@ fn big_play_button_focuses_the_player(cx: &mut TestAppContext) {
 fn clicking_the_bar_focuses_the_player(cx: &mut TestAppContext) {
     let harness = Harness::open(cx, Setup::default());
     harness.wait_playing(cx);
-    harness.click(cx, "remaining-time");
+    harness.click(cx, "time-display");
     assert!(harness.focused(cx, |view| view.focus.clone()));
     harness.click(cx, "mute");
     assert!(!harness.focused(cx, |view| view.focus.clone()), "a control takes focus itself");

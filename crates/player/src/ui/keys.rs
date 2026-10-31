@@ -30,6 +30,8 @@ pub enum Key {
     PageUp,
     /// Page Down.
     PageDown,
+    /// Escape.
+    Escape,
 }
 
 /// The modifier keys held with a [`Key`].
@@ -60,6 +62,8 @@ pub enum Focus {
     SeekBar,
     /// The volume bar.
     VolumeBar,
+    /// An entry of the open Settings menu.
+    Menu,
 }
 
 /// How far the seek bar's arrow keys move, Video.js's `stepSeconds`.
@@ -80,7 +84,10 @@ const VOLUME_STEP: f64 = 0.1;
 ///    Page Down/Page Up 60 seconds, Home and End go to the start and end, the digits `0`-`9` to 0-90 % of the
 ///    duration, and Space or Enter toggles play. End and the digits are unhandled while the duration is unknown.
 /// 3. With [`Focus::VolumeBar`]: Left/Down and Right/Up change the volume by 0.1.
-/// 4. The [`Hotkeys`], if they are enabled. Letters match in either case.
+/// 4. With [`Focus::Menu`], as Video.js's menus: Down and Up move the focus, wrapping, Enter or Space activates the
+///    focused entry, and Escape closes the menu. Left goes back from an item's page to the root page, which Video.js,
+///    without nested menus, does not have.
+/// 5. The [`Hotkeys`], if they are enabled. Letters match in either case.
 pub fn map(
     key: Key,
     modifiers: Modifiers,
@@ -94,6 +101,7 @@ pub fn map(
     let slider = match focus {
         Focus::SeekBar => seek_bar(key, duration),
         Focus::VolumeBar => volume_bar(key),
+        Focus::Menu => menu(key),
         Focus::Player => None,
     };
     slider.or_else(|| hotkey(key, hotkeys))
@@ -121,6 +129,17 @@ fn volume_bar(key: Key) -> Option<Action> {
     match key {
         Key::Left | Key::Down => Some(Action::StepVolume(-VOLUME_STEP)),
         Key::Right | Key::Up => Some(Action::StepVolume(VOLUME_STEP)),
+        _ => None,
+    }
+}
+
+fn menu(key: Key) -> Option<Action> {
+    match key {
+        Key::Down => Some(Action::FocusNext),
+        Key::Up => Some(Action::FocusPrevious),
+        Key::Enter | Key::Space => Some(Action::ActivateFocused),
+        Key::Escape => Some(Action::CloseSettings),
+        Key::Left => Some(Action::Back),
         _ => None,
     }
 }
@@ -216,6 +235,19 @@ mod tests {
         assert_eq!(volume_bar(Key::Up), Some(Action::StepVolume(0.1)));
         assert_eq!(volume_bar(Key::Home), None);
         assert_eq!(volume_bar(Key::Space), Some(Action::TogglePlay));
+    }
+
+    #[test]
+    fn menu_keys() {
+        let menu = |key| map(key, Modifiers::NONE, Focus::Menu, &Hotkeys::default(), DURATION);
+        assert_eq!(menu(Key::Down), Some(Action::FocusNext));
+        assert_eq!(menu(Key::Up), Some(Action::FocusPrevious));
+        assert_eq!(menu(Key::Enter), Some(Action::ActivateFocused));
+        assert_eq!(menu(Key::Space), Some(Action::ActivateFocused), "not the play hotkey");
+        assert_eq!(menu(Key::Escape), Some(Action::CloseSettings));
+        assert_eq!(menu(Key::Left), Some(Action::Back));
+        assert_eq!(menu(Key::Char('m')), Some(Action::ToggleMute), "other keys are hotkeys");
+        assert_eq!(player(Key::Escape), None, "Escape is not a hotkey");
     }
 
     #[test]

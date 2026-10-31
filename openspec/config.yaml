@@ -15,9 +15,11 @@ context: |
   - API design reference: https://github.com/vegidio/media-rs, which does for FFmpeg what this project does for mpv
     (safe, ergonomic wrapper over static native libs). Follow its conventions for build scripts, linking, error handling
     and public API style unless there is a reason not to.
-  - UI look, feel and frontend behaviour: Video.js (https://videojs.org). Control bar layout, controls, keyboard
-    shortcuts, hover/idle behaviour, menus, fullscreen, captions UI, etc. must match Video.js. When unsure how something
-    should look or behave, do what Video.js does.
+  - UI behaviour: Video.js (https://videojs.org). Controls, keyboard shortcuts, hover/idle behaviour, menus,
+    fullscreen, captions UI, etc. must behave as in Video.js, unless a design deliberately departs from it and says so.
+    When unsure how something should behave, do what Video.js does.
+  - UI look: each skin's own design, in the "Video Player Skins" Claude Design canvas. A skin's control bar layout,
+    sizes, colours and icons follow its design, not Video.js's CSS.
   - GUI toolkit: GPUI-Kit (https://gpui-kit.com) first; drop down to raw GPUI (https://gpui.rs) only for what GPUI-Kit
     cannot do.
 
@@ -86,8 +88,8 @@ context: |
     (controls, layout, input, animations), plus the GPUI-specific glue that puts mpv's frames on screen. An app already
     using GPUI-Kit adds this crate to get a video player component.
 
-  Planned later: other GUI crates (e.g. `crates/egui`) offering the same player features and Video.js-based look on
-  other Rust GUI toolkits. Every design decision must keep that possible:
+  Planned later: other GUI crates (e.g. `crates/egui`) offering the same player features, Video.js-based behaviour and
+  skins on other Rust GUI toolkits. Every design decision must keep that possible:
   - Anything not specific to a GUI toolkit (player state, playback logic, track selection, time/format helpers, UI state
     that is toolkit-agnostic) belongs in `crates/player`, so it is not reimplemented per toolkit.
   - GUI crates must never call libmpv directly; they go through `crates/player`.
@@ -122,7 +124,7 @@ rules:
   proposal:
     - State which crate(s) the change touches (`crates/player`, `crates/gpui`, or both) and why each piece belongs where
       it is.
-    - For UI changes, reference the Video.js behaviour or look being reproduced.
+    - For UI changes, reference the Video.js behaviour or the skin design being reproduced.
     - For backend changes, name the libmpv APIs, properties, commands or options involved.
     - Call out any platform (macOS, Windows, Linux) the change does not support yet.
     - If the change needs infrastructure, state what you found in `rust-sak` for it - including "nothing" - before

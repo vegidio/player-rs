@@ -12,12 +12,14 @@ pub(crate) struct Activity {
     held: bool,
     /// The pointer is over the control bar.
     over_bar: bool,
+    /// The Settings menu is open.
+    menu: bool,
     timeout: Duration,
 }
 
 impl Activity {
     pub(crate) fn new(timeout: Duration, now: Instant) -> Self {
-        Self { last_input: now, held: false, over_bar: false, timeout }
+        Self { last_input: now, held: false, over_bar: false, menu: false, timeout }
     }
 
     /// Any input: pointer movement, a key, a click or an action.
@@ -50,14 +52,20 @@ impl Activity {
         self.input(now);
     }
 
+    /// The Settings menu opened (`true`) or closed; the user stays active while it is open.
+    pub(crate) fn menu(&mut self, open: bool, now: Instant) {
+        self.menu = open;
+        self.input(now);
+    }
+
     pub(crate) fn active(&self, now: Instant) -> bool {
         self.deadline().is_none_or(|deadline| now < deadline)
     }
 
     /// When the user becomes inactive without further input, or `None` if they cannot: with a zero timeout, a held
-    /// button or the pointer over the control bar.
+    /// button, the pointer over the control bar or the Settings menu open.
     pub(crate) fn deadline(&self) -> Option<Instant> {
-        if self.timeout.is_zero() || self.held || self.over_bar {
+        if self.timeout.is_zero() || self.held || self.over_bar || self.menu {
             None
         } else {
             Some(self.last_input + self.timeout)
@@ -130,6 +138,17 @@ mod tests {
         activity.leave(secs(start, 5.0));
         assert!(activity.active(secs(start, 6.9)));
         assert!(!activity.active(secs(start, 7.0)));
+    }
+
+    #[test]
+    fn open_menu() {
+        let start = Instant::now();
+        let mut activity = Activity::new(TIMEOUT, start);
+        activity.menu(true, start);
+        assert!(activity.active(secs(start, 10.0)));
+        assert_eq!(activity.deadline(), None);
+        activity.menu(false, secs(start, 10.0));
+        assert!(!activity.active(secs(start, 12.0)));
     }
 
     #[test]

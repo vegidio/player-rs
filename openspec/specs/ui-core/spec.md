@@ -7,7 +7,7 @@ The toolkit-agnostic layer that gives every frontend the Video.js player experie
 ### Requirement: UI options with Video.js defaults
 
 The core crate SHALL provide UI options, built and validated before use, for:
-- whether controls are shown
+- which parts of the controls are visible
 - a poster image
 - the playback rates offered
 - an aspect ratio for the player
@@ -17,20 +17,29 @@ The core crate SHALL provide UI options, built and validated before use, for:
 - the hotkeys
 
 Unset values SHALL default as in Video.js:
-- controls shown
+- every part visible
 - no poster
-- no playback rates
 - no fixed aspect ratio
 - an inactivity timeout of 2 seconds
 - click and double-click enabled
 
-The one deliberate exception is the hotkeys, which SHALL be enabled by default. Building SHALL fail with an error naming the option in each of these cases:
+There are two deliberate exceptions:
+- The hotkeys SHALL be enabled by default.
+- The playback rates SHALL default to 0.25 to 3 in steps of 0.25 (`0.25, 0.5, 0.75, ..., 3`), so the Speed setting is offered without configuration.
+
+An explicitly empty list of playback rates SHALL mean no rates are offered. Building SHALL fail with an error naming the option in each of these cases:
 - a playback rate is not finite or is outside `0.01..=100`
 - an aspect ratio is not two positive numbers in `W:H` form
 
+There SHALL be no option that hides every control; drawing no controls is a frontend's choice of skin.
+
 #### Scenario: Defaults
 - **WHEN** UI options are built without setting any value
-- **THEN** controls are shown, no playback rates are offered, the inactivity timeout is 2 seconds, click and double-click are enabled and hotkeys are enabled
+- **THEN** every part is visible, the playback rates are the twelve values from 0.25 to 3 in steps of 0.25, the inactivity timeout is 2 seconds, click and double-click are enabled and hotkeys are enabled
+
+#### Scenario: No rates
+- **WHEN** UI options are built with an empty list of playback rates
+- **THEN** no playback rates are offered
 
 #### Scenario: Invalid playback rate
 - **WHEN** UI options are built with the playback rates `[0.5, NaN]` or `[0.0, 1.0]`
@@ -101,6 +110,9 @@ The UI layer SHALL perform these actions on the player:
 - set the volume, step the volume by an amount
 - set the rate, cycle the rate
 - toggle fullscreen
+- retry after an error
+- toggle the time display
+- open, close and navigate the Settings menu
 
 Toggle mute SHALL follow Video.js: at volume 0, it SHALL set the volume to the last non-zero volume (at least 0.1) and unmute. Otherwise it SHALL flip the mute state. Stepping or setting the volume while muted SHALL unmute. Cycling the rate SHALL select the playback rate after the current one in the configured list, wrapping around, or the first one if the current rate is not in the list. With no rates configured, it SHALL do nothing. Toggling fullscreen SHALL not touch the player; it SHALL be returned to the frontend as a request, because only the frontend controls its window.
 
@@ -180,39 +192,44 @@ When the volume bar has focus, Left or Down SHALL lower and Right or Up SHALL ra
 
 ### Requirement: Clicks on the video
 
-When controls are shown:
-- A click on the video SHALL toggle play.
-- A double-click SHALL also request fullscreen, as in Video.js, where its two clicks still toggle play twice.
-
-When the click or double-click option is disabled, or controls are hidden, the corresponding action SHALL not happen.
+A click on the video SHALL toggle play. A double-click SHALL also request fullscreen, as in Video.js, where its two clicks still toggle play twice. When the click or double-click option is disabled, the corresponding action SHALL not happen. Both SHALL work the same whatever the frontend draws, including when it draws no controls.
 
 #### Scenario: Click toggles play
-- **WHEN** controls are shown, media is paused and the video is clicked
+- **WHEN** media is paused and the video is clicked
 - **THEN** playback starts
 
 #### Scenario: Double-click requests fullscreen
-- **WHEN** controls are shown and the video is double-clicked
+- **WHEN** the video is double-clicked
 - **THEN** a fullscreen request is returned to the frontend
 
-#### Scenario: Controls hidden
-- **WHEN** controls are hidden and the video is clicked
+#### Scenario: Click disabled
+- **WHEN** the click option is disabled and the video is clicked
 - **THEN** the playback state does not change
+
+#### Scenario: Controls hidden
+- **WHEN** the frontend draws no controls, media is paused and the video is clicked
+- **THEN** playback starts
 
 ### Requirement: User activity and control-bar visibility
 
 The UI layer SHALL track user activity as Video.js does:
 - **Becoming active**: the user SHALL be active on any pointer movement, pointer press, key press or other input.
 - **Becoming inactive**: the user SHALL become inactive once the inactivity timeout has passed with no input.
-- **Holding active**: the user SHALL stay active while a pointer button is held or the pointer is over the control bar.
+- **Holding active**: the user SHALL stay active while a pointer button is held, while the pointer is over the control bar, or while the Settings menu is open.
 - **Timeout of zero**: an inactivity timeout of zero SHALL mean the user never becomes inactive.
 
+The frontend SHALL be able to choose a control-bar policy with two independent settings, both off by default:
+- show the control bar before playback first starts
+- show the control bar while the media's error is shown
+
 The control bar SHALL be hidden in each of these cases:
-- before playback first starts for the current media
-- when controls are hidden
-- when the media failed to load
+- before playback first starts for the current media, unless the policy shows it then
+- when the media failed to load, unless the policy shows it then
 - once playback has started, the user is inactive and the media is playing
 
-The control bar SHALL be visible in every other case, including whenever the media is paused. The pointer cursor SHALL be hidden over the player when, and only when, the user is inactive and the media is playing. When it changes visibility, the control bar SHALL fade in over 0.1 seconds and fade out over 1 second. The UI layer SHALL tell the frontend when it next needs to be updated for activity to time out.
+The control bar SHALL be visible in every other case, including whenever the media is paused. While the media's error is shown, the UI layer SHALL report the controls as disabled. Every action except toggling fullscreen and retrying SHALL then do nothing.
+
+The pointer cursor SHALL be hidden over the player when, and only when, the user is inactive and the media is playing. When it changes visibility, the control bar SHALL fade in over 0.1 seconds and fade out over 1 second. The UI layer SHALL tell the frontend when it next needs to be updated for activity to time out.
 
 #### Scenario: Controls hide while playing
 - **WHEN** media is playing and there has been no input for 2 seconds
@@ -234,17 +251,35 @@ The control bar SHALL be visible in every other case, including whenever the med
 - **WHEN** media is playing and a pointer button is held without moving for 10 seconds
 - **THEN** the control bar stays visible
 
+#### Scenario: Open Settings menu
+- **WHEN** media is playing and the Settings menu stays open for 10 seconds without input
+- **THEN** the control bar stays visible
+
 #### Scenario: Zero timeout
 - **WHEN** the inactivity timeout is zero and media plays for 10 seconds without input
 - **THEN** the control bar stays visible
 
 #### Scenario: Before playback starts
-- **WHEN** media is loaded with autoplay off and has not been played
+- **WHEN** media is loaded with autoplay off and has not been played, under the default policy
 - **THEN** the control bar is hidden
+
+#### Scenario: Shown before start by policy
+- **WHEN** the policy shows the bar before playback starts, and media is loaded with autoplay off and has not been played
+- **THEN** the control bar is visible and does not hide while the media stays paused
+
+#### Scenario: Shown on error by policy
+- **WHEN** the policy shows the bar on error and a source that cannot be opened is loaded
+- **THEN** the control bar is visible, the controls are reported disabled, and play does nothing while fullscreen is still requested
 
 ### Requirement: Start state, loading and errors
 
-The UI layer SHALL show the big play button and, when a poster is set, the poster while the current media has not started playing, as Video.js does before `has-started`. Both SHALL be hidden once playback starts, and shown again when new media is loaded. Activating the big play button SHALL start playback. A loading spinner SHALL be shown once media is loaded and playback has been waiting, for the network or for a seek, for 0.3 seconds, as Video.js delays it. It SHALL be hidden as soon as the wait ends. When media fails to load, the UI layer SHALL report its error message. The error SHALL be cleared when other media is loaded. The play control SHALL show:
+The UI layer SHALL show the big play button and, when a poster is set, the poster while the current media has not started playing, as Video.js does before `has-started`. The big play button SHALL not be shown when its part is hidden. Both SHALL be hidden once playback starts, and shown again when new media is loaded. Activating the big play button SHALL start playback.
+
+A loading spinner SHALL be shown once media is loaded and playback has been waiting, for the network or for a seek, for 0.3 seconds, as Video.js delays it. It SHALL be hidden as soon as the wait ends, and never shown while its part is hidden.
+
+When media fails to load, the UI layer SHALL report its error message, whether or not the error display part is visible. The error display SHALL be reported as shown only when its part is visible. The error SHALL be cleared when other media, or the same media again, is loaded.
+
+The play control SHALL show:
 - a play icon while paused
 - a pause icon while playing
 - a replay icon once the media has played to its end
@@ -252,6 +287,10 @@ The UI layer SHALL show the big play button and, when a poster is set, the poste
 #### Scenario: Before the first play
 - **WHEN** media with a poster set is loaded with autoplay off
 - **THEN** the big play button and the poster are shown and the play control shows the play icon
+
+#### Scenario: Big play button hidden
+- **WHEN** the big play button part is hidden and media is loaded with autoplay off
+- **THEN** the big play button is not shown
 
 #### Scenario: Started
 - **WHEN** the big play button is activated
@@ -266,7 +305,7 @@ The UI layer SHALL show the big play button and, when a poster is set, the poste
 - **THEN** the spinner is never shown; when a wait lasts longer, the spinner is shown from 0.3 seconds after it began until it ends
 
 #### Scenario: Load failure
-- **WHEN** a source that cannot be opened is loaded
+- **WHEN** a source that cannot be opened is loaded under the default control-bar policy
 - **THEN** the error message is reported and the control bar is hidden
 
 ### Requirement: Seek bar
@@ -331,15 +370,121 @@ The volume bar SHALL report the volume as its fraction, or zero while muted, as 
 
 ### Requirement: Playback rate control
 
-The playback rate control SHALL be offered only when playback rates are configured. Its label SHALL be the current rate followed by `x`, with no trailing zeros (`1x`, `1.5x`). Activating it SHALL cycle the rate.
+The playback rate SHALL be offered as the Speed item of the Settings menu, only when playback rates are configured and the Speed part is visible. Its value label SHALL be the current rate followed by `x`, with no trailing zeros (`1x`, `1.5x`). Its page SHALL list every configured rate in order, with the current rate checked. Selecting one SHALL set that rate.
 
 #### Scenario: No rates
 - **WHEN** no playback rates are configured
-- **THEN** no rate control is offered
+- **THEN** the Speed item is not offered
+
+#### Scenario: Speed hidden
+- **WHEN** playback rates are configured but the Speed part is hidden
+- **THEN** the Speed item is not offered
 
 #### Scenario: Label and cycle
-- **WHEN** the playback rates are `[1, 1.5, 2]`, the rate is 1 and the rate control is activated
-- **THEN** the rate becomes 1.5 and the label is `1.5x`
+- **WHEN** the playback rates are `[1, 1.5, 2]`, the rate is 1 and the rate is cycled
+- **THEN** the rate becomes 1.5 and the Speed item's value reads `1.5x`
+
+#### Scenario: Label and selection
+- **WHEN** the playback rates are `[1, 1.5, 2]`, the rate is 1, and `1.5x` is selected on the Speed page
+- **THEN** the rate becomes 1.5, the Speed item's value reads `1.5x` and `1.5x` is checked
+
+### Requirement: Part visibility and the Settings button
+
+The UI options SHALL let each of these parts be shown or hidden independently, as Video.js's per-component options do:
+- play control
+- volume (mute control and volume bar)
+- seek bar
+- current time
+- time display (duration or remaining time)
+- fullscreen control
+- each Settings item, which today is Speed
+- big play button
+- loading spinner
+- error display
+- seek-bar hover time
+
+The UI layer SHALL report each part as shown only when it is both visible and available. The Settings button SHALL not be an option of its own: it SHALL be reported as shown when, and only when, at least one Settings item is shown.
+
+#### Scenario: Hidden part
+- **WHEN** the volume part is hidden
+- **THEN** the UI layer reports the volume as not shown, while the mute hotkey still toggles mute
+
+#### Scenario: Settings follows its only item
+- **WHEN** the Speed part is hidden
+- **THEN** the Settings button is reported as not shown
+
+#### Scenario: Settings needs an available item
+- **WHEN** the Speed part is visible but no playback rates are configured
+- **THEN** the Settings button is reported as not shown
+
+#### Scenario: Settings shown
+- **WHEN** the Speed part is visible and playback rates are configured
+- **THEN** the Settings button is reported as shown
+
+### Requirement: Settings menu
+
+The UI layer SHALL keep the Settings menu's state:
+- whether it is open
+- which page it shows: the root page listing the shown Settings items with their current values, or an item's own page
+- which entry has keyboard focus
+
+Activating the Settings button SHALL open the menu on its root page, or close it if it is open. Activating an item on the root page SHALL open that item's page. Going back SHALL return to the root page. Selecting an entry on an item's page SHALL apply it and return to the root page.
+
+With focus in the menu, keys SHALL act as on Video.js menus:
+- Down moves focus to the next entry, and Up to the previous one, wrapping
+- Enter or Space activates the focused entry
+- Escape closes the menu
+- Left on an item's page goes back to the root page
+
+The menu SHALL close when the control bar hides, when other media is loaded, and when the Settings button stops being shown.
+
+#### Scenario: Open and navigate
+- **WHEN** the Settings button is activated and then the Speed item is activated
+- **THEN** the menu is open on the Speed page with the current rate checked
+
+#### Scenario: Select a speed
+- **WHEN** the Speed page is open, the rate is 1 and `1.5x` is selected
+- **THEN** the rate becomes 1.5 and the menu shows the root page, where Speed reads `1.5x`
+
+#### Scenario: Keys in the menu
+- **WHEN** the menu is open on the root page with Speed focused, and Enter, Down and Enter are pressed
+- **THEN** the Speed page opens and the rate after the current one in the list is selected
+
+#### Scenario: Escape
+- **WHEN** the menu is open and Escape is pressed with focus in it
+- **THEN** the menu closes and the key is reported handled
+
+#### Scenario: Closes with the bar
+- **WHEN** the menu is open and the control bar hides
+- **THEN** the menu is closed
+
+### Requirement: Time display toggle
+
+The time display SHALL show either the remaining time, as the remaining-time label is written, or the duration, as a time label is written. It SHALL start with the remaining time. Activating it SHALL switch between the two, and the choice SHALL be kept for the life of the player view, across loaded media. This deliberately departs from Video.js, which shows the duration and the remaining time as separate fixed components.
+
+#### Scenario: Starts with remaining time
+- **WHEN** 2-minute media is at 0:42
+- **THEN** the time display reads `-1:18`
+
+#### Scenario: Toggle
+- **WHEN** the time display is activated while 2-minute media is at 0:42
+- **THEN** it reads `2:00`, and activating it again makes it read `-1:18`
+
+### Requirement: Retry after an error
+
+Retrying SHALL load the last source given to the player again and SHALL start playback whatever the autoplay mode, because the user asked to play. Retrying with no source ever loaded SHALL do nothing and succeed. A successful load SHALL clear the error.
+
+#### Scenario: Retry succeeds
+- **WHEN** a source failed to load because it was briefly unavailable, it becomes available, and retry is performed
+- **THEN** the media loads, the error is cleared and playback starts
+
+#### Scenario: Retry fails again
+- **WHEN** retry is performed for a source that still cannot be opened
+- **THEN** the error is reported again
+
+#### Scenario: Nothing to retry
+- **WHEN** retry is performed on a player that never loaded a source
+- **THEN** nothing happens and no error is returned
 
 ### Requirement: Consistent UI behaviour on all platforms
 

@@ -1,4 +1,4 @@
-//! [`VideoPlayer`]: a player's video and its Video.js controls as a GPUI element.
+//! [`VideoPlayer`]: a player's video and its controls as a GPUI element, drawn by a [`Skin`].
 
 use crate::controls::{ControlsView, FullscreenCallback};
 #[cfg(video)]
@@ -7,8 +7,8 @@ use gpui_kit::*;
 use player::{Player, ui};
 use std::rc::Rc;
 
-/// Shows a [`Player`]'s video, letterboxed on black, with Video.js's controls over it. Size and position it like any
-/// `div`.
+/// Shows a [`Player`]'s video, letterboxed on black, with controls over it drawn by its [`Skin`]. Size and position it
+/// like any `div`.
 ///
 /// Its state, including the player's video surfaces and its controls, is kept per element id for as long as an element
 /// with that id is rendered in consecutive frames, so the parent view can re-render freely. Rendering it with a
@@ -24,8 +24,23 @@ pub struct VideoPlayer {
     player: Player,
     /// `None` for the default, which is only built when the options are read.
     options: Option<ui::Options>,
+    skin: Skin,
     on_fullscreen_change: Option<FullscreenCallback>,
     style: StyleRefinement,
+}
+
+/// How a [`VideoPlayer`]'s controls look. Whatever the skin, the element takes the same input: clicks, double-clicks
+/// and keys follow the [options](VideoPlayer::options), and the [actions](crate::TogglePlay) and fullscreen work the
+/// same.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+#[non_exhaustive]
+pub enum Skin {
+    /// The player's own controls, with every part the [options](player::ui::Parts) show. Until its designed look
+    /// arrives, this is Video.js 8's default skin.
+    #[default]
+    Default,
+    /// No controls, overlays, spinner, error display or poster: bare video, which the app may control itself.
+    None,
 }
 
 /// The element's keyed state. The views are separate entities, so they can be replaced when the element is given a
@@ -38,11 +53,11 @@ struct Slot {
 }
 
 impl Slot {
-    fn new(player: &Player, options: ui::Options, window: &mut Window, cx: &mut Context<Self>) -> Self {
+    fn new(player: &Player, options: ui::Options, skin: Skin, window: &mut Window, cx: &mut Context<Self>) -> Self {
         Self {
             #[cfg(video)]
             video: cx.new(|cx| VideoView::new(player, cx)),
-            controls: cx.new(|cx| ControlsView::new(player, options, window, cx)),
+            controls: cx.new(|cx| ControlsView::new(player, options, skin, window, cx)),
         }
     }
 }
@@ -54,13 +69,14 @@ impl VideoPlayer {
             id: id.into(),
             player: player.clone(),
             options: None,
+            skin: Skin::default(),
             on_fullscreen_change: None,
             style: StyleRefinement::default(),
         }
     }
 
-    /// The player's UI options: controls, playback rates, aspect ratio, hotkeys and so on. Defaults to
-    /// [`ui::Options::default`], which shows the controls.
+    /// The player's UI options: visible parts, playback rates, aspect ratio, hotkeys and so on. Defaults to
+    /// [`ui::Options::default`], under which every part is visible.
     ///
     /// As Video.js reads its options at construction, they are read when the element's state is created and when it
     /// is given a different player; changing them on a later render under the same id and player has no effect.
@@ -68,6 +84,15 @@ impl VideoPlayer {
     /// Video.js's fluid mode, unless a height is set on the element.
     pub fn options(mut self, options: ui::Options) -> Self {
         self.options = Some(options);
+        self
+    }
+
+    /// The skin that draws the controls; [`Skin::Default`] unless set. For bare video, pass [`Skin::None`].
+    ///
+    /// Like the [options](Self::options), it is read when the element's state is created and when it is given a
+    /// different player; changing it on a later render under the same id and player has no effect.
+    pub fn skin(mut self, skin: Skin) -> Self {
+        self.skin = skin;
         self
     }
 
@@ -88,14 +113,14 @@ impl Styled for VideoPlayer {
 
 impl RenderOnce for VideoPlayer {
     fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
-        let Self { id, player, options, on_fullscreen_change, style } = self;
+        let Self { id, player, options, skin, on_fullscreen_change, style } = self;
         let slot = window.use_keyed_state(id.clone(), cx, |window, cx| {
-            Slot::new(&player, options.clone().unwrap_or_default(), window, cx)
+            Slot::new(&player, options.clone().unwrap_or_default(), skin, window, cx)
         });
         let controls = slot.update(cx, |slot, cx| {
             if !Player::ptr_eq(slot.controls.read(cx).player(), &player) {
                 // The previous views, and with them the renderer, are released once nothing holds them.
-                *slot = Slot::new(&player, options.unwrap_or_default(), window, cx);
+                *slot = Slot::new(&player, options.unwrap_or_default(), skin, window, cx);
             }
             slot.controls.clone()
         });

@@ -160,6 +160,23 @@ impl Player {
         event::load(self.mpv(), self.inner.autoplay, &source)
     }
 
+    /// Loads the source last given to [`load`](Self::load) again, as `load` does, for example to retry media that
+    /// failed to load. Does nothing and returns `Ok` if no source was ever loaded.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Property`] or [`Error::Command`] if mpv rejects the request.
+    pub fn reload(&self) -> Result<()> {
+        self.reload_last().map(|_| ())
+    }
+
+    /// [`reload`](Self::reload), telling whether there was a source to load.
+    pub(crate) fn reload_last(&self) -> Result<bool> {
+        let Some(source) = self.inner.shared.last_source() else { return Ok(false) };
+        self.load(source)?;
+        Ok(true)
+    }
+
     /// Starts or resumes playback. Media that has played to its end restarts from the beginning, as in Video.js.
     ///
     /// # Errors

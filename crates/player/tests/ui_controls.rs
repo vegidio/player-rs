@@ -8,7 +8,9 @@ mod common;
 
 use common::TIMEOUT;
 use player::prelude::*;
-use player::ui::{self, Action, Controls, Focus, Hotkeys, Key, Modifiers, PlayIcon, Request, View};
+use player::ui::{
+    self, Action, BarPolicy, Controls, Focus, Hotkeys, Key, Modifiers, Page, Parts, PlayIcon, Request, View,
+};
 use rust_sak::fs::{TempDir, mk_temp_dir};
 use std::time::{Duration, Instant};
 
@@ -22,6 +24,10 @@ struct Harness {
 
 impl Harness {
     fn new(autoplay: Autoplay, options: ui::Options) -> Self {
+        Self::with_policy(autoplay, options, BarPolicy::default())
+    }
+
+    fn with_policy(autoplay: Autoplay, options: ui::Options, policy: BarPolicy) -> Self {
         let player = Player::builder()
             .video_output(VideoOutput::Null)
             .autoplay(autoplay)
@@ -29,7 +35,7 @@ impl Harness {
             .build()
             .expect("the player builds");
         let events = player.subscribe();
-        let controls = Controls::new(&player, options, Instant::now());
+        let controls = Controls::new(&player, options, policy, Instant::now());
         Self { player, events, controls, _dir: None }
     }
 
@@ -39,6 +45,12 @@ impl Harness {
         let path = common::write_wav(dir.path(), "tone.wav", seconds);
         self._dir = Some(dir);
         self.load(Source::file(path).unwrap());
+    }
+
+    /// Loads a source that cannot be opened and waits for its error.
+    fn load_broken(&mut self) {
+        self.player.load(Source::url("av://lavfi:no-such-filter").unwrap()).unwrap();
+        self.wait("the error", |_, v| v.error.is_some());
     }
 
     fn load(&mut self, source: Source) {
@@ -259,17 +271,44 @@ fn video_clicks() {
 }
 
 #[test]
-fn video_clicks_with_controls_or_clicks_off() {
-    let hidden = ui::Options::builder().controls(false).build().unwrap();
+fn video_clicks_off() {
     let no_clicks = ui::Options::builder().click(false).double_click(false).build().unwrap();
-    for options in [hidden, no_clicks] {
-        let mut h = Harness::new(Autoplay::Off, options);
-        h.load_wav(2);
-        h.controls.video_clicked(Instant::now()).unwrap();
-        assert_eq!(h.controls.video_double_clicked(Instant::now()), None);
-        h.drain();
-        assert!(h.player.state().paused);
-    }
+    let mut h = Harness::new(Autoplay::Off, no_clicks);
+    h.load_wav(2);
+    h.controls.video_clicked(Instant::now()).unwrap();
+    assert_eq!(h.controls.video_double_clicked(Instant::now()), None);
+    h.drain();
+    assert!(h.player.state().paused);
+}
+
+#[test]
+fn video_clicks_whatever_is_shown() {
+    let none = Parts::default()
+        .play(false)
+        .volume(false)
+        .seek_bar(false)
+        .current_time(false)
+        .time_display(false)
+        .fullscreen(false)
+        .speed(false)
+        .big_play_button(false)
+        .spinner(false)
+        .error_display(false)
+        .seek_hover(false);
+    let mut h = Harness::new(Autoplay::Off, ui::Options::builder().parts(none).build().unwrap());
+    h.load_wav(10);
+    h.controls.video_clicked(Instant::now()).unwrap();
+    h.wait("playback", |s, _| !s.paused);
+    assert_eq!(h.controls.video_double_clicked(Instant::now()), Some(Request::ToggleFullscreen));
+}
+
+#[test]
+fn hidden_volume_keeps_the_mute_hotkey() {
+    let hidden = ui::Options::builder().parts(Parts::default().volume(false)).build().unwrap();
+    let mut h = Harness::new(Autoplay::Off, hidden);
+    assert!(!h.controls.view(Instant::now()).shown.volume);
+    assert!(h.key(Key::Char('m'), Focus::Player).handled);
+    h.wait("the player to mute", |s, _| s.muted);
 }
 
 #[test]
@@ -315,8 +354,7 @@ fn rate_cycling() {
     assert_eq!(h.controls.view(Instant::now()).rate.as_deref(), Some("1x"));
 
     h.perform(Action::CycleRate);
-    let view = h.wait("the rate to be 1.5", |s, _| approx(s.rate, 1.5));
-    assert_eq!(view.rate.as_deref(), Some("1.5x"));
+    h.wait("the rate to be 1.5", |s, v| approx(s.rate, 1.5) && v.rate.as_deref() == Some("1.5x"));
 
     h.perform(Action::SetRate(2.0));
     h.wait("the rate to be 2", |s, _| approx(s.rate, 2.0));
@@ -340,7 +378,7 @@ fn rate_cycling() {
 
 #[test]
 fn no_rates_no_rate_control() {
-    let mut h = Harness::new(Autoplay::Off, options());
+    let mut h = Harness::new(Autoplay::Off, ui::Options::builder().playback_rates([]).build().unwrap());
     assert_eq!(h.controls.view(Instant::now()).rate, None);
     h.perform(Action::CycleRate);
     h.drain();
@@ -534,6 +572,7 @@ fn unplayable_source() {
     assert!(!view.error.unwrap().is_empty());
     let view = h.wait("the player to become idle", |s, _| s.idle);
     assert!(!view.control_bar_visible && !view.big_play_button && !view.spinner);
+    assert!(!view.controls_enabled && view.shown.error_display);
 
     // Loading other media clears the error.
     h.load_wav(2);
@@ -599,4 +638,166 @@ fn zero_inactivity_timeout() {
     let view = h.controls.view(secs(start, 10.0));
     assert!(view.control_bar_visible && !view.cursor_hidden);
     assert_eq!(view.next_deadline, None);
+}
+
+#[test]
+fn shown_before_start_by_policy() {
+    let policy = BarPolicy { before_start: true, ..BarPolicy::default() };
+    let mut h = Harness::with_policy(Autoplay::Off, options(), policy);
+    h.load_wav(10);
+    let start = Instant::now();
+    assert!(h.controls.view(start).control_bar_visible);
+    assert!(h.controls.view(secs(start, 10.0)).control_bar_visible, "paused media keeps it");
+
+    // Video.js's policy hides it until playback starts.
+    let mut h = Harness::new(Autoplay::Off, options());
+    h.load_wav(10);
+    assert!(!h.controls.view(Instant::now()).control_bar_visible);
+}
+
+#[test]
+fn shown_on_error_by_policy() {
+    let policy = BarPolicy { on_error: true, ..BarPolicy::default() };
+    let mut h = Harness::with_policy(Autoplay::Off, options(), policy);
+    h.load_broken();
+    let view = h.wait("the player to become idle", |s, _| s.idle);
+    assert!(view.control_bar_visible && !view.controls_enabled);
+
+    assert_eq!(h.perform(Action::Play), None);
+    assert_eq!(h.key(Key::Char('k'), Focus::Player).request, None);
+    h.drain();
+    assert!(h.player.state().paused, "play does nothing");
+    assert_eq!(h.perform(Action::ToggleFullscreen), Some(Request::ToggleFullscreen));
+}
+
+#[test]
+fn time_display_toggle() {
+    let mut h = Harness::new(Autoplay::Off, options());
+    h.load_wav(120);
+    // Half a second past the mark: mpv's default seek may land a little before it, and labels count whole seconds.
+    h.player.seek(Seek::To(Duration::from_millis(42_500))).unwrap();
+    let view = h.wait("0:42", |_, v| v.current_time == "0:42");
+    assert_eq!((view.time_display, view.time_label.as_str()), (ui::TimeDisplay::Remaining, "-1:18"));
+
+    h.perform(Action::ToggleTimeDisplay);
+    let view = h.controls.view(Instant::now());
+    assert_eq!((view.time_display, view.time_label.as_str()), (ui::TimeDisplay::Duration, "2:00"));
+    assert!(h.player.state().paused, "playback does not change");
+
+    // The choice is kept across loaded media.
+    h.load_wav(90);
+    let view = h.wait("the new duration", |_, v| v.duration == "1:30");
+    assert_eq!((view.time_display, view.time_label.as_str()), (ui::TimeDisplay::Duration, "1:30"));
+
+    h.perform(Action::ToggleTimeDisplay);
+    assert_eq!(h.controls.view(Instant::now()).time_label, "-1:30");
+}
+
+#[test]
+fn select_a_speed() {
+    let rates = ui::Options::builder().playback_rates([1.0, 1.5, 2.0]).build().unwrap();
+    let mut h = Harness::new(Autoplay::On, rates);
+    h.load_wav(30);
+    h.wait("playback", |s, _| !s.paused);
+
+    h.perform(Action::ToggleSettings);
+    h.perform(Action::Select(0));
+    let menu = h.controls.view(Instant::now()).settings.menu.unwrap();
+    assert_eq!(menu.page, Page::Speed);
+    assert!(menu.items[0].checked, "the current rate is checked");
+
+    h.perform(Action::Select(1));
+    let view = h.wait("the rate to be 1.5", |s, v| approx(s.rate, 1.5) && v.rate.as_deref() == Some("1.5x"));
+    let menu = view.settings.menu.unwrap();
+    assert_eq!(menu.page, Page::Root);
+    assert_eq!(menu.items[0].value.as_deref(), Some("1.5x"));
+
+    h.perform(Action::OpenPage(Page::Speed));
+    let menu = h.controls.view(Instant::now()).settings.menu.unwrap();
+    let checked: Vec<_> = menu.items.iter().map(|item| item.checked).collect();
+    assert_eq!(checked, [false, true, false]);
+}
+
+#[test]
+fn keys_in_the_menu() {
+    let rates = ui::Options::builder().playback_rates([0.5, 1.0, 1.5, 2.0]).build().unwrap();
+    let mut h = Harness::new(Autoplay::On, rates);
+    h.load_wav(30);
+    h.wait("playback", |s, _| !s.paused);
+
+    h.perform(Action::ToggleSettings);
+    for key in [Key::Enter, Key::Down, Key::Enter] {
+        assert!(h.key(key, Focus::Menu).handled, "{key:?}");
+    }
+    h.wait("the rate after the current one", |s, _| approx(s.rate, 1.5));
+    assert!(!h.player.state().paused, "Enter does not toggle play");
+
+    let outcome = h.key(Key::Escape, Focus::Menu);
+    assert_eq!(outcome, ui::KeyOutcome { handled: true, request: None });
+    assert_eq!(h.controls.view(Instant::now()).settings.menu, None);
+}
+
+#[test]
+fn open_settings_menu_keeps_the_bar() {
+    let mut h = Harness::new(Autoplay::On, options());
+    h.load_wav(30);
+    h.wait("playback", |s, _| !s.paused);
+    let start = Instant::now();
+    h.controls.perform(Action::ToggleSettings, start).unwrap();
+    let view = h.controls.view(secs(start, 10.0));
+    assert!(view.control_bar_visible && view.settings.menu.is_some());
+    assert_eq!(view.next_deadline, None);
+}
+
+#[test]
+fn menu_closes_with_the_bar() {
+    let mut h = Harness::new(Autoplay::On, options());
+    h.load_wav(30);
+    h.wait("playback", |s, _| !s.paused);
+    h.perform(Action::ToggleSettings);
+    assert!(h.controls.view(Instant::now()).settings.menu.is_some());
+
+    // Stopping unloads the media, which hides the bar until playback starts again.
+    h.player.stop().unwrap();
+    let view = h.wait("the bar to hide", |_, v| !v.control_bar_visible);
+    assert_eq!(view.settings.menu, None);
+    h.drain();
+    h.load_wav(30);
+    h.wait("playback", |s, _| !s.paused);
+    assert_eq!(h.controls.view(Instant::now()).settings.menu, None, "it stays closed");
+}
+
+#[test]
+fn retry_after_the_source_becomes_readable() {
+    let mut h = Harness::new(Autoplay::Off, options());
+    let dir = mk_temp_dir("player-rs-").unwrap();
+    let path = dir.path().join("later.wav");
+    h.player.load(Source::file(&path).unwrap()).unwrap();
+    h.wait("the error", |_, v| v.error.is_some());
+
+    common::write_wav(dir.path(), "later.wav", 10);
+    assert_eq!(h.perform(Action::Retry), None);
+    h.wait_event("the source to load", |event, _| *event == Event::Loaded);
+    let view = h.wait("playback, whatever the autoplay mode", |s, _| !s.paused && !s.idle);
+    assert_eq!(view.error, None);
+}
+
+#[test]
+fn retry_that_fails_again() {
+    let mut h = Harness::new(Autoplay::On, options());
+    h.load_broken();
+    h.drain();
+    h.perform(Action::Retry);
+    h.wait_event("the error again", |event, _| matches!(event, Event::Ended(EndReason::Error(_))));
+    assert!(h.controls.view(Instant::now()).error.is_some());
+}
+
+#[test]
+fn nothing_to_retry() {
+    let mut h = Harness::new(Autoplay::Off, options());
+    h.player.reload().unwrap();
+    assert_eq!(h.perform(Action::Retry), None);
+    h.drain();
+    let state = h.player.state();
+    assert!(state.idle && state.paused);
 }
