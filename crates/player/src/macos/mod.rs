@@ -5,11 +5,13 @@
 //! CPU, also with VideoToolbox hardware decoding, which is the default for [`VideoOutput::Render`] players on macOS. No
 //! OpenGL and no `unsafe` code are needed to use it.
 //!
+//! The player needs [`VideoOutput::Render`], the builder's default video output.
+//!
 //! ```no_run
 //! use player::macos::{SurfaceFormat, SurfaceRenderer};
 //! use player::prelude::*;
 //!
-//! let player = Player::builder().video_output(VideoOutput::Render).build()?;
+//! let player = Player::builder().build()?;
 //! let renderer = SurfaceRenderer::builder(&player)
 //!     .format(SurfaceFormat::Nv12)
 //!     .on_frame(|| { /* wake the UI thread, which then repaints */ })

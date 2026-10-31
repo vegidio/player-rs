@@ -133,7 +133,13 @@ impl Default for Setup {
 }
 
 fn player(autoplay: Autoplay, volume: f64) -> Player {
-    Player::builder().autoplay(autoplay).volume(volume).mpv_option("ao", "null").build().unwrap()
+    Player::builder()
+        .video_output(VideoOutput::Null)
+        .autoplay(autoplay)
+        .volume(volume)
+        .mpv_option("ao", "null")
+        .build()
+        .unwrap()
 }
 
 impl Harness {

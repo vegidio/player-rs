@@ -35,9 +35,10 @@
 //!
 //! # Rendering video
 //!
-//! A player built with [`VideoOutput::Render`] draws its video through a [`RenderContext`], into an OpenGL
-//! framebuffer the application owns. mpv does the decoding, scaling, colour conversion and subtitle rendering on the
-//! GPU, and no frame is copied through the CPU. Any toolkit with an OpenGL context can show the result.
+//! A player built with [`VideoOutput::Render`], the default video output, draws its video through a
+//! [`RenderContext`], into an OpenGL framebuffer the application owns. mpv does the decoding, scaling, colour
+//! conversion and subtitle rendering on the GPU, and no frame is copied through the CPU. Any toolkit with an OpenGL
+//! context can show the result.
 //!
 //! - [`RenderContext::new`] is `unsafe`: the GL context must be current on the thread that creates, uses and drops
 //!   the render context, and must outlive it.
@@ -57,7 +58,7 @@
 //!     // ...
 //! }
 //!
-//! let player = Player::builder().video_output(VideoOutput::Render).build()?;
+//! let player = Player::builder().build()?;
 //! let (wake, frames) = mpsc::channel();
 //! // SAFETY: the toolkit's GL context is current on this thread, where `render` is used and dropped, and outlives it.
 //! let mut render = unsafe {

@@ -21,6 +21,7 @@ const TEST_SOURCE: &str = "av://lavfi:testsrc=duration=2:size=160x120:rate=25";
 
 fn player(autoplay: Autoplay) -> Player {
     Player::builder()
+        .video_output(VideoOutput::Null)
         .autoplay(autoplay)
         .mpv_option("ao", "null")
         .build()
@@ -110,7 +111,20 @@ fn autoplay_on() {
     wait_position_past(&events, Duration::from_millis(200));
     let state = player.state();
     assert!(!state.paused);
-    assert_eq!(state.video_size, None, "no video is shown with VideoOutput::Null");
+    assert_eq!(state.video_size, None, "a player without video output reports no video size");
+}
+
+#[test]
+fn default_output_without_render_context() {
+    let player = Player::builder().autoplay(Autoplay::On).mpv_option("ao", "null").build().unwrap();
+    let events = player.subscribe();
+    load_source(&player, &events, Source::url(common::TEST_SOURCE_WITH_AUDIO).unwrap());
+
+    // mpv deselects the video track it cannot show, and the audio plays on.
+    wait_position_past(&events, Duration::from_millis(500));
+    let state = player.state();
+    assert!(!state.paused && !state.ended, "{state:?}");
+    assert_eq!(state.video_size, None, "no video is shown without a render context");
 }
 
 #[test]
@@ -211,7 +225,12 @@ fn fast_seek() {
 
 #[test]
 fn buffered_position() {
-    let player = Player::builder().mpv_option("ao", "null").mpv_option("cache", "yes").build().unwrap();
+    let player = Player::builder()
+        .video_output(VideoOutput::Null)
+        .mpv_option("ao", "null")
+        .mpv_option("cache", "yes")
+        .build()
+        .unwrap();
     let events = player.subscribe();
     assert_eq!(player.state().buffered, None, "an idle player has no buffered position");
 
@@ -310,6 +329,7 @@ fn play_to_the_end_then_play_again() {
 #[test]
 fn ended_resets_on_next_load_without_keep_open() {
     let player = Player::builder()
+        .video_output(VideoOutput::Null)
         .autoplay(Autoplay::On)
         .mpv_option("ao", "null")
         .mpv_option("keep-open", "no")

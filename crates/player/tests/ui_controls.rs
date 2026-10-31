@@ -23,6 +23,7 @@ struct Harness {
 impl Harness {
     fn new(autoplay: Autoplay, options: ui::Options) -> Self {
         let player = Player::builder()
+            .video_output(VideoOutput::Null)
             .autoplay(autoplay)
             .mpv_option("ao", "null")
             .build()

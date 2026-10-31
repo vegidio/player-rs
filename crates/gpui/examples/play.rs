@@ -73,11 +73,7 @@ fn main() -> ExitCode {
         gpui_kit::init(cx);
         cx.on_window_closed(|cx, _| cx.quit()).detach();
 
-        let player = Player::builder()
-            .video_output(VideoOutput::Render)
-            .autoplay(Autoplay::On)
-            .build()
-            .expect("the player builds");
+        let player = Player::builder().autoplay(Autoplay::On).build().expect("the player builds");
         // Loaded before the window's first frame, as an app's view constructor would.
         player.load(source).expect("the file loads");
 

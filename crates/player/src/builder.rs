@@ -21,8 +21,8 @@ pub enum Autoplay {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub enum VideoOutput {
-    /// No video is shown; audio still plays.
-    #[default]
+    /// No video is shown; audio still plays. The opt-in for audio-only or headless use: media without audio plays
+    /// through to its end, and hardware decoding stays off.
     Null,
     /// The application draws the video through a [`RenderContext`](crate::RenderContext), which must be created
     /// before the first [`Player::load`], or through a surface renderer (`player::macos`, `player::windows`,
@@ -33,6 +33,7 @@ pub enum VideoOutput {
     /// (`hwdec=vaapi,nvdec`: Intel and AMD GPUs, or NVIDIA GPUs), whose frames reach the GPU without a copy. mpv
     /// falls back to software decoding by itself where no such decoder can decode a file; `mpv_option("hwdec", "no")`
     /// turns it off.
+    #[default]
     Render,
 }
 
@@ -47,7 +48,7 @@ impl VideoOutput {
 
 /// Builds a [`Player`]; created by [`Player::builder`].
 ///
-/// Unset values default to [`Autoplay::Off`], volume `1.0`, unmuted and [`VideoOutput::Null`].
+/// Unset values default to [`Autoplay::Off`], volume `1.0`, unmuted and [`VideoOutput::Render`].
 #[derive(Debug, Clone)]
 pub struct PlayerBuilder {
     autoplay: Autoplay,
@@ -63,7 +64,7 @@ impl Default for PlayerBuilder {
             autoplay: Autoplay::Off,
             volume: 1.0,
             muted: false,
-            video_output: VideoOutput::Null,
+            video_output: VideoOutput::Render,
             mpv_options: vec![],
         }
     }
@@ -171,7 +172,7 @@ mod tests {
 
     #[test]
     fn default_player() {
-        let player = Player::builder().mpv_option("ao", "null").build().unwrap();
+        let player = Player::builder().video_output(VideoOutput::Null).mpv_option("ao", "null").build().unwrap();
         let state = player.state();
         assert!(state.idle);
         assert_eq!((state.position, state.duration), (None, None));
@@ -186,6 +187,13 @@ mod tests {
         assert!(!player.get_property::<bool>("input-default-bindings").unwrap());
         assert!(!player.get_property::<bool>("input-vo-keyboard").unwrap());
         assert!(!player.get_property::<bool>("osc").unwrap());
+    }
+
+    #[test]
+    fn default_output() {
+        let player = Player::builder().mpv_option("ao", "null").build().unwrap();
+        assert_eq!(player.get_property::<String>("vo").unwrap(), "libmpv");
+        assert_eq!(VideoOutput::default(), VideoOutput::Render);
     }
 
     #[test]
@@ -211,6 +219,7 @@ mod tests {
             "no"
         };
         assert_eq!(render, expected);
+        assert_eq!(hwdec(Player::builder()), expected);
         assert_eq!(hwdec(Player::builder().video_output(VideoOutput::Null)), "no");
     }
 

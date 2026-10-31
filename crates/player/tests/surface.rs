@@ -289,7 +289,7 @@ fn no_notification_after_drop() {
 #[cfg(not(target_os = "macos"))]
 #[test]
 fn rejects_a_player_without_render_output() {
-    let player = Player::builder().mpv_option("ao", "null").build().unwrap();
+    let player = Player::builder().video_output(VideoOutput::Null).mpv_option("ao", "null").build().unwrap();
     let result = SurfaceRenderer::builder(&player).build();
     let Err(Error::Render(message)) = result else {
         panic!("a surface renderer was created: {result:?}")

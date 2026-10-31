@@ -7,11 +7,13 @@
 //! through the CPU, also with hardware decoding, which is the default for [`VideoOutput::Render`] players on Linux. No
 //! OpenGL, no EGL and no `unsafe` code are needed to use it.
 //!
+//! The player needs [`VideoOutput::Render`], the builder's default video output.
+//!
 //! ```no_run
 //! use player::prelude::*;
 //! use player::linux::SurfaceRenderer;
 //!
-//! let player = Player::builder().video_output(VideoOutput::Render).build()?;
+//! let player = Player::builder().build()?;
 //! let renderer = SurfaceRenderer::builder(&player)
 //!     .on_frame(|| { /* wake the UI thread, which then repaints */ })
 //!     .build()?;

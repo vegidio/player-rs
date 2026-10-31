@@ -429,9 +429,10 @@ fn control_bar_visible(controls: bool, error: bool, started: bool, active: bool,
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::builder::VideoOutput;
 
     fn player() -> Player {
-        Player::builder().mpv_option("ao", "null").build().unwrap()
+        Player::builder().video_output(VideoOutput::Null).mpv_option("ao", "null").build().unwrap()
     }
 
     #[test]

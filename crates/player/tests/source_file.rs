@@ -8,6 +8,7 @@ use std::time::Duration;
 
 fn player() -> Player {
     Player::builder()
+        .video_output(VideoOutput::Null)
         .autoplay(Autoplay::On)
         .mpv_option("ao", "null")
         .build()

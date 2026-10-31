@@ -28,6 +28,7 @@
 //! use player::ui::{self, Focus, Key, Modifiers};
 //! use std::time::{Duration, Instant};
 //!
+//! // `VideoOutput::Render`, the default: the frontend shows the video through a render context or surface renderer.
 //! let player = Player::builder().build()?;
 //! let options = ui::Options::builder().playback_rates([0.5, 1.0, 1.5, 2.0]).aspect_ratio("16:9").build()?;
 //! let mut controls = ui::Controls::new(&player, options, Instant::now());

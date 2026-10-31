@@ -45,13 +45,14 @@ Behaviour follows [Video.js](https://videojs.org) where the two differ:
 - **End of media:** media that plays to its end stays loaded and paused there (mpv's `keep-open=yes`) and reports `Event::Ended(EndReason::Eof)`; `play()` then restarts it from the beginning. To get mpv's default instead (unload at the end), build with `.mpv_option("keep-open", "no")`.
 - **Autoplay** (`Off`, `On`, `Muted`) applies to every `load`.
 - **Volume** is `0.0..=1.0`. The builder rejects other values; the runtime setters clamp them, as does the playback rate (`0.01..=100.0`).
+- **Video output** defaults to `VideoOutput::Render`, so video apps need no extra line (see [Rendering video](#rendering-video)). For audio-only or headless use, build with `.video_output(VideoOutput::Null)`: it keeps media without audio playing through to its end, where a `Render` player with no render context drops the video track and ends at once, and it keeps hardware decoding off. **Behaviour change:** earlier versions defaulted to `VideoOutput::Null`.
 
 ### Rendering video
 
-Build the player with `VideoOutput::Render` and create a `RenderContext` from your toolkit's OpenGL context. mpv then draws each frame into a framebuffer you own, doing decoding, scaling, colour conversion and subtitles on the GPU, without copying frames through the CPU:
+Players use `VideoOutput::Render` by default. Create a `RenderContext` from your toolkit's OpenGL context. mpv then draws each frame into a framebuffer you own, doing decoding, scaling, colour conversion and subtitles on the GPU, without copying frames through the CPU:
 
 ```rust,ignore
-let player = Player::builder().video_output(VideoOutput::Render).build()?;
+let player = Player::builder().build()?;
 // SAFETY: the GL context is current on this thread, where `render` is used and dropped, and outlives it.
 let mut render = unsafe { RenderContext::new(&player, get_proc_address, move || wake_render_thread())? };
 player.load(Source::file("movie.mp4")?)?;
@@ -145,7 +146,7 @@ impl Render for Movie {
 fn main() {
     gpui_kit::application().with_assets(player_gpui::Assets).run(|cx| {
         gpui_kit::init(cx);
-        let player = Player::builder().video_output(VideoOutput::Render).build().expect("the player builds");
+        let player = Player::builder().build().expect("the player builds");
         player.load(Source::file("movie.mp4").expect("the file exists")).expect("the file loads");
         let options = ui::Options::builder().playback_rates([0.5, 1.0, 1.5, 2.0]).build().expect("valid options");
         gpui_kit::open_window(WindowOptions::default(), cx, |_, cx| cx.new(|_| Movie { player, options }))

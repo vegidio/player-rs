@@ -431,8 +431,8 @@ pub(crate) mod tests {
 
     #[gpui_kit::test]
     fn stays_black_when_the_player_cannot_render(cx: &mut TestAppContext) {
-        // Built without `VideoOutput::Render`: the renderer cannot be created, and the element stays black.
-        let player = Player::builder().mpv_option("ao", "null").build().unwrap();
+        // Built with `VideoOutput::Null`: the renderer cannot be created, and the element stays black.
+        let player = Player::builder().video_output(VideoOutput::Null).mpv_option("ao", "null").build().unwrap();
         let harness = open(cx, &[&player]);
         harness.pump(cx, "the view", |_| live_views().len() == 1);
         let view = live_views().remove(0);

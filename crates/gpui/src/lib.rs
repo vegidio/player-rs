@@ -18,7 +18,7 @@
 //!
 //! impl Movie {
 //!     fn new() -> player::Result<Self> {
-//!         let player = Player::builder().video_output(VideoOutput::Render).autoplay(Autoplay::On).build()?;
+//!         let player = Player::builder().autoplay(Autoplay::On).build()?;
 //!         player.load(Source::file("movie.mp4")?)?;
 //!         let options = ui::Options::builder().playback_rates([0.5, 1.0, 1.5, 2.0]).build()?;
 //!         Ok(Self { player, options })
@@ -57,8 +57,8 @@
 //! - **Icons.** The app registers [`Assets`], which serves the controls' icons and falls back to GPUI-Kit's default
 //!   bundle, in place of `gpui_kit::assets::Assets`. An app with an asset source of its own composes [`Icons`], the
 //!   icons that bundle lacks, into it instead. Without either, some control icons are blank.
-//! - **Player.** It must be built with `VideoOutput::Render`. It may load media before the element is first rendered.
-//!   Otherwise the element stays black and logs a warning.
+//! - **Player.** It must use `VideoOutput::Render`, the default video output; otherwise the element stays black and
+//!   logs a warning. It may load media before the element is first rendered.
 //! - **Windows and Linux.** Apps that build for Windows or Linux must patch GPUI in their workspace root with the fork
 //!   that adds video surfaces:
 //!

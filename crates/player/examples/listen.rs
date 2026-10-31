@@ -1,5 +1,8 @@
 //! Plays a local file or a URL without a window (audio only), printing the player's events until the media ends.
 //!
+//! The player is built with `VideoOutput::Null`: with the default `VideoOutput::Render` and no render context, mpv
+//! drops the video track, so media without audio would end at once instead of playing through.
+//!
 //! ```sh
 //! cargo run -p player-rs --example listen -- path/to/movie.mp4
 //! cargo run -p player-rs --example listen -- https://example.com/movie.mp4
@@ -17,7 +20,7 @@ fn main() -> Result<ExitCode> {
     // An existing path is a file even if it looks like a URL, such as `http://clip.mp4` (a directory named `http:`).
     let source = if Path::new(&arg).exists() { Source::file(&arg)? } else { Source::url(&arg)? };
 
-    let player = Player::builder().autoplay(Autoplay::On).build()?;
+    let player = Player::builder().video_output(VideoOutput::Null).autoplay(Autoplay::On).build()?;
     let events = player.subscribe();
     player.load(source)?;
 

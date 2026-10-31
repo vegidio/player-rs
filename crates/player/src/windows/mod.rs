@@ -6,11 +6,13 @@
 //! the CPU, also with hardware decoding, which is the default for [`VideoOutput::Render`] players on Windows. No
 //! OpenGL, no Direct3D device of the renderer and no `unsafe` code are needed to use it.
 //!
+//! The player needs [`VideoOutput::Render`], the builder's default video output.
+//!
 //! ```no_run
 //! use player::prelude::*;
 //! use player::windows::SurfaceRenderer;
 //!
-//! let player = Player::builder().video_output(VideoOutput::Render).build()?;
+//! let player = Player::builder().build()?;
 //! let renderer = SurfaceRenderer::builder(&player)
 //!     .on_frame(|| { /* wake the UI thread, which then repaints */ })
 //!     .build()?;

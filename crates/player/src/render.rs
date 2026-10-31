@@ -24,8 +24,9 @@ pub struct RenderTarget {
 /// Draws a player's video into OpenGL framebuffers the application owns, with mpv doing all decoding, scaling, colour
 /// conversion and subtitle rendering on the GPU.
 ///
-/// The player must be built with [`VideoOutput::Render`], and the render context created before the first
-/// [`Player::load`]: media loaded while no render context exists plays without video until it is loaded again.
+/// The player must be built with [`VideoOutput::Render`], the default video output, and the render context created
+/// before the first [`Player::load`]: media loaded while no render context exists plays without video until it is
+/// loaded again.
 ///
 /// # Threads
 ///

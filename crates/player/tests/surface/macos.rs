@@ -118,7 +118,7 @@ fn decode(y: u8, cb: u8, cr: u8) -> [u8; 3] {
 
 #[test]
 fn rejects_a_player_without_render_output() {
-    let player = Player::builder().mpv_option("ao", "null").build().unwrap();
+    let player = Player::builder().video_output(VideoOutput::Null).mpv_option("ao", "null").build().unwrap();
     let result = SurfaceRenderer::builder(&player).gl_renderer(gl_renderer()).build();
     let Err(Error::Render(message)) = result else {
         panic!("a surface renderer was created: {result:?}")

@@ -321,7 +321,7 @@ mod tests {
     use super::*;
 
     fn player() -> Player {
-        Player::builder().mpv_option("ao", "null").build().unwrap()
+        Player::builder().video_output(VideoOutput::Null).mpv_option("ao", "null").build().unwrap()
     }
 
     #[test]
