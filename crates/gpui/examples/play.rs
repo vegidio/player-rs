@@ -1,4 +1,5 @@
-//! Plays a local file in a resizable window, for checking the player element by hand.
+//! Plays a local file in a resizable window, for checking the player element by hand. The window opens at 960×540 and
+//! takes the video's aspect ratio, with its longer side at 960, once the video's size is known.
 //!
 //! ```sh
 //! cargo run -p player-gpui --example play -- path/to/movie.mp4 [default|none]
@@ -25,10 +26,21 @@ struct Play {
     skin: Skin,
     renders: usize,
     _report: Task<()>,
+    _fit: Task<()>,
 }
 
 impl Play {
-    fn new(player: Player, skin: Skin, cx: &mut Context<Self>) -> Self {
+    fn new(player: Player, skin: Skin, window: &Window, cx: &mut Context<Self>) -> Self {
+        // The size is known only once the player element has made its render context, after the window opens.
+        let events = player.subscribe();
+        let fit = cx.spawn_in(window, async move |this, cx| {
+            while let Some(event) = events.recv_async().await {
+                if let Event::VideoSizeChanged(Some((width, height))) = event {
+                    let _ = this.update_in(cx, |_, window, _| window.resize(fit(width, height)));
+                    break;
+                }
+            }
+        });
         let report = cx.spawn(async move |this, cx| {
             loop {
                 cx.background_executor().timer(Duration::from_secs(1)).await;
@@ -42,7 +54,18 @@ impl Play {
                 }
             }
         });
-        Self { player, options: ui::Options::default(), skin, renders: 0, _report: report }
+        Self { player, options: ui::Options::default(), skin, renders: 0, _report: report, _fit: fit }
+    }
+}
+
+/// The window size with the video's aspect ratio and its longer side at 960.
+fn fit(width: u32, height: u32) -> Size<Pixels> {
+    const LONGER: f32 = 960.;
+    let (width, height) = (width as f32, height as f32);
+    if width >= height {
+        size(px(LONGER), px((LONGER * height / width).round()))
+    } else {
+        size(px((LONGER * width / height).round()), px(LONGER))
     }
 }
 
@@ -90,7 +113,8 @@ fn main() -> ExitCode {
 
         let bounds = Bounds::centered(None, size(px(960.), px(540.)), cx);
         let options = WindowOptions { window_bounds: Some(WindowBounds::Windowed(bounds)), ..Default::default() };
-        gpui_kit::open_window(options, cx, |_, cx| cx.new(|cx| Play::new(player, skin, cx))).expect("the window opens");
+        gpui_kit::open_window(options, cx, |window, cx| cx.new(|cx| Play::new(player, skin, window, cx)))
+            .expect("the window opens");
         cx.activate(true);
     });
     ExitCode::SUCCESS
